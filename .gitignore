@@ -1,0 +1,11 @@
+# Host noise
+.DS_Store
+*.swp
+
+# Scratch projects used by hand-run slice proofs / tests
+.scratch/
+
+# Container-local runtime state that must never be committed
+# (slr's project marker; a devbox-managed state dir if one is added later)
+.slr/
+.devbox/
