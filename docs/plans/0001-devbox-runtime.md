@@ -1,6 +1,11 @@
 # 0001 — `devbox` runtime: isolated per-project development environments
 
-## Status: proposed — awaiting explicit go
+## Status: proposed — slice 1 signed off (2026-09-24), slice 2 authorized
+
+Slice-1 sign-off accepts the boundary and slr findings (D9, D10, criterion 5, the
+answered socket question); it is **not** plan completion. This plan stays in
+`docs/plans/` and only moves to `docs/plans/completed/` once the work is
+implemented and reviewed clean.
 
 **Amendment A1 (2026-09-24, developer-requested):** added acceptance criterion 11
 and decision D9 — the container's shell config is inlined in `images/base` and no
@@ -14,6 +19,56 @@ directory. Criterion 5 clarified ("as seen inside the container") and criterion 
 extended so `doctor` distinguishes Docker volumes from host binds. Slice-1 socket
 open question answered. Budget rows for `profiles/lisp.yaml`, `compose/`,
 `bin/devbox`, and `tests/doctor.test.sh` updated.
+
+**Amendment A3 (2026-09-25, slice-2 findings — image build mechanics).** No change
+to any criterion, no change to the file list or to the five slice-2 rows; only this
+file's own row is updated (360 → 409).
+
+1. **Chaining images needs a named build context.** Compose/bake builds services
+   in parallel, so a leaf's `FROM devbox/base:<tag>` races the base build
+   (`pull access denied` on a clean machine). Leaves now take their base as the
+   named context `base` (`FROM base`); compose supplies
+   `additional_contexts: {base: service:base}` — which is also what expresses the
+   build dependency — and a standalone build passes
+   `--build-context base=docker-image://devbox/base:local`. D3's mechanism
+   (ARG HARNESS + one compose invocation) is unchanged and verified: from zero
+   images, one `docker compose build` produced base, lisp and go in 1m19s with the
+   harness applied exactly once in each.
+2. **BuildKit is required, and this host's Docker CLI does not find its
+   plugins.** Without them `docker build` silently uses the legacy builder, whose
+   heredoc bodies are written empty — an image with no shell config. The shell
+   config is therefore written as `COPY <<'ZSHRC'` heredocs, which *fail* on the
+   legacy builder (verified) and satisfy criterion 11 unchanged. Buildx 0.37.1 and
+   compose 5.5.1 are already installed at
+   `/opt/homebrew/lib/docker/cli-plugins`, but the Apple-Silicon CLI does not
+   search that path; exposing them through a `DOCKER_CONFIG` whose `cli-plugins/`
+   symlinks them works (verified). **How devbox always gets them is a slice-3
+   decision** — devbox-managed `DOCKER_CONFIG` in `bin/devbox`, or a one-time
+   `~/.docker/cli-plugins` symlink the developer runs (a host-global write, so
+   theirs to make).
+3. **slr source input** (answers the "SBCL/slr installation shape inside the
+   image" open question). `devconsultingpl/smart-lisp-repl` is private and this
+   repo is public, so the source is neither vendored here nor fetched with a
+   credential (I4, I5). It arrives as the named build context `slr`, produced from
+   the developer's checkout with `git -C <slr> archive HEAD | tar -x -C "$SLR_SRC"`;
+   `install.sh --prefix=/usr/local` then rebuilds `slr.core` against the image's
+   own SBCL (43 MB, SBCL 2.2.9.debian). Reversible to a one-line `git clone` if
+   slr is ever published — it is MIT and the developer owns it.
+4. **D10 nuance.** Mounting the volume at `<project>/.slr` makes dockerd create
+   that directory in the host project on first run; it stays empty — marker,
+   socket, PID and logs all live on the volume (verified on `/dev/vdb1`, ext4).
+   "Leaves no artifact in the host project directory" therefore means no *file*.
+
+**Recorded, not started (developer input, 2026-09-25).** The runtime must stay
+flexible across many tools and services (postgres, kafka, redis, wordpress, …), and
+an environment an agent installs and configures *after* the container starts should
+be capturable for reuse. Consequences, none of them slice-2 scope: slice 4's service
+pattern generalizes to a per-profile list of pinned upstream images — service
+images never derive from `images/base` and so never carry a harness; the capture
+path needs its own plan, because turning a configured container into a reusable
+*reviewable recipe* (rather than an opaque `docker commit`) is an I6 question;
+and further CL implementations (ECL, CCL, Carp) plus other languages become sibling
+toolchain layers next to `images/lisp`.
 
 ## Goal
 
@@ -117,7 +172,7 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 353 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 409 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
