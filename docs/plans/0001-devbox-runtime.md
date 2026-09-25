@@ -68,7 +68,26 @@ images never derive from `images/base` and so never carry a harness; the capture
 path needs its own plan, because turning a configured container into a reusable
 *reviewable recipe* (rather than an opaque `docker commit`) is an I6 question;
 and further CL implementations (ECL, CCL, Carp) plus other languages become sibling
-toolchain layers next to `images/lisp`.
+toolchain layers next to `images/sbcl`.
+
+**Amendment A4 (2026-09-25, developer decision):** the Common Lisp toolchain layer
+is named after its implementation — `images/sbcl` (formerly `images/lisp`), with
+`images/ecl`, `images/clasp`, `images/ccl`, `images/abcl`, `images/carp`, … to
+follow as their own layers. Live plan text updated to match: criteria 2 and 5 say
+`sbcl` profile, budget rows now read `images/sbcl/Dockerfile` (35) and
+`profiles/sbcl.yaml` (27), D2 and the slice-2 summary name `images/sbcl`. No
+substance changed — same file, same 24 lines, same criteria. One useful
+consequence: `slr` is SBCL-only, so the private-source build context (`slr`, A3.3)
+is needed by exactly one layer. A1–A3 keep their original wording as history.
+
+**Amendment A5 (2026-09-25, slice-2 implementation detail not fixed by D3):** the
+harness slot lives in `images/base` — it declares `ARG HARNESS`, copies
+`harnesses/<name>.sh` and runs it once, which is what makes the seam "adding one
+file" (D3) and means the toolchain layers carry neither the slot nor any agent
+name. D2 still holds as written: no image names an agent. Verified — one harness
+file and one `pi` binary in each of the three images, zero harness or agent names
+under `images/`. A service image never derives from `images/base`, so it can never
+inherit a harness (relevant to the service flexibility noted above).
 
 ## Goal
 
@@ -132,7 +151,7 @@ Binary, each answerable yes/no from the diff or from a named command.
    `<project>` (read-write) plus `<project>/.git/hooks` (read-only).
 2. `devbox doctor <profile> <project>` exits non-zero when the **effective**
    `docker compose config` violates any of I1–I4, and exits 0 on a clean profile.
-   Docker-managed storage is not a host path: a `type=volume` mount (the `lisp`
+   Docker-managed storage is not a host path: a `type=volume` mount (the `sbcl`
    profile's `.slr/`, D10) must **not** be reported as an I1 violation, while a
    host bind outside the project still must be.
 3. From inside the container, no host path outside the project is readable —
@@ -140,7 +159,7 @@ Binary, each answerable yes/no from the diff or from a named command.
 4. Host global state is untouched: checksums of `~/.zshrc`, `~/.config`, `~/.pi`,
    and the Homebrew prefix are identical before and after a session that ran
    aggressive commands inside the container.
-5. `slr` runs in a `lisp`-profile container, and its persistent image and client
+5. `slr` runs in an `sbcl`-profile container, and its persistent image and client
    socket live under the project's `.slr/` **as seen inside the container** — a
    container-private `type=volume` mount (D10). The host's own `.slr/` is shadowed
    and unchanged, and the container leaves no artifact in the host project
@@ -172,22 +191,22 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 409 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 430 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
 | `images/base/Dockerfile` | 55 |
-| `images/lisp/Dockerfile` | 35 |
+| `images/sbcl/Dockerfile` | 35 |
 | `images/go/Dockerfile` | 30 |
 | `harnesses/pi.sh` | 30 |
 | `harnesses/none.sh` | 10 |
 | `bin/devbox` | 185 |
 | `compose/devbox.compose.yaml` | 62 |
 | `profiles/base.yaml` | 25 |
-| `profiles/lisp.yaml` | 27 |
+| `profiles/sbcl.yaml` | 27 |
 | `profiles/go-postgres.yaml` | 25 |
 | `tests/doctor.test.sh` | 95 |
-| **Total** | **~1430–1500** |
+| **Total** | **~1520–1590** |
 
 Application logic ≈ 270 lines (`bin/devbox` + harness scripts). Everything else
 is declarative config, docs, or tests. Growth beyond ~1400 without an updated
@@ -203,8 +222,9 @@ requires a Docker OAuth account, which fails the explicit "no external
 commercial tools" constraint. *Rejected:* Gondolin as the first runtime — see
 D7 and the backlog.
 
-**D2 — Toolchain layers are harness-free.** `images/base` → `images/lisp` /
-`images/go` know nothing about any agent. This is what makes the runtime
+**D2 — Toolchain layers are harness-free.** `images/base` → the toolchain
+layers (`images/sbcl`, `images/go`, …) know nothing about any agent. This is what
+makes the runtime
 extensible to any harness later, and it is why the harness seam is a separate
 concern rather than a `RUN` line sprinkled in the toolchain layers.
 
@@ -302,7 +322,7 @@ question — `bin/slr` is a shell launcher around a precompiled SBCL core, and i
 runs a persistent image plus a client socket under the project's `.slr/`, which
 sits on the mounted path).
 
-**Slice 2 — image layering + harness seam.** `images/base`, `images/lisp`,
+**Slice 2 — image layering + harness seam.** `images/base`, `images/sbcl`,
 `images/go`, `harnesses/pi.sh`, `ARG HARNESS`, and the pi settings that
 deliberately omit the permission extension.
 
