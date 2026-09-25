@@ -1,0 +1,22 @@
+# Profile: go-postgres — Go toolchain (harness pi) plus a postgres service: pinned
+# upstream image, private `devbox` network, no host port (criterion 6), data in an
+# anonymous volume — dropped with the project by `devbox down -v`. Slice 4 verifies
+# the session; the profile is authored here so `doctor` covers it.
+services:
+  devbox-base:
+    build:
+      args:
+        HARNESS: pi
+
+  postgres:
+    image: postgres:17-alpine
+    environment: {POSTGRES_HOST_AUTH_METHOD: trust, POSTGRES_DB: devbox}
+    volumes: [/var/lib/postgresql/data]
+    networks: [devbox]
+
+  devbox:
+    build:
+      context: ${DEVBOX_REPO:?set by bin/devbox}
+      dockerfile: images/go/Dockerfile
+      additional_contexts: {base: service:devbox-base}
+    depends_on: [postgres]

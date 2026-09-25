@@ -1,0 +1,61 @@
+# devbox — the canonical compose skeleton (D7: the host trusts this file, and it
+# resolves from this repo, never from a mounted project).
+#
+# Every value here is either profile-independent or comes from the environment
+# that bin/devbox sets. A profile from profiles/ is merged on top of this file and
+# supplies the toolchain layer, the harness, and any services.
+#
+#   docker compose -f compose/devbox.compose.yaml -f profiles/<p>.yaml config
+#
+# Invariants I1–I6 (AGENTS.md) are what `devbox doctor` checks the effective form
+# of this file against.
+name: ${DEVBOX_PROJECT_NAME:?set by bin/devbox}
+
+services:
+  # The base layer of the chain: the toolchain image the devbox service builds on
+  # top of (A5 — the harness seam lives in this layer, so a profile selects its
+  # harness here). It is never started, only built, and it is tagged by profile so
+  # the tag is the same no matter which project is being worked in.
+  devbox-base:
+    image: devbox/base-${DEVBOX_PROFILE:?set by bin/devbox}:local
+    profiles: ["build"]
+    build:
+      context: ${DEVBOX_REPO:?set by bin/devbox}
+      dockerfile: images/base/Dockerfile
+      args:
+        HARNESS: none
+
+  devbox:
+    image: devbox/dev-${DEVBOX_PROFILE:?set by bin/devbox}:local
+
+    # The toolchain layer and the harness come from the profile; these defaults
+    # are the bare base image (profiles/base.yaml).
+    build:
+      context: ${DEVBOX_REPO:?set by bin/devbox}
+      dockerfile: images/base/Dockerfile
+      args:
+        HARNESS: none
+
+    # The only host paths in the container: the project read-write, and its git
+    # hooks directory read-only (I1, D4 — .git/hooks is the one file class that
+    # escapes into automatic host execution).
+    volumes:
+      - type: bind
+        source: ${DEVBOX_PROJECT:?set by bin/devbox}
+        target: /workspace
+      - type: bind
+        source: ${DEVBOX_PROJECT}/.git/hooks
+        target: /workspace/.git/hooks
+        read_only: true
+
+    working_dir: /workspace
+    init: true
+    # The container is a place to work in, not a process: keep it alive so
+    # `devbox shell` can exec into it.
+    command: ["sleep", "infinity"]
+    networks:
+      - devbox
+    restart: "no"
+
+networks:
+  devbox:

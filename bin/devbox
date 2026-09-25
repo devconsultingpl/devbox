@@ -1,0 +1,140 @@
+#!/bin/sh
+# devbox — the CLI.
+#
+#   devbox up     <profile> <project>   build and start the box, detached
+#   devbox shell  <profile> <project>   shell into the running box
+#   devbox down   <profile> <project>   stop it, remove it, drop its volumes (D10)
+#   devbox doctor <profile> <project>   validate the effective config (I1–I4)
+#
+# Canonical config resolves from this repo, never from the mounted project
+# (D7, I6, criterion 9). The socket and the Docker CLI plugins are resolved here,
+# never inherited from the ambient environment (AGENTS.md slice-1 finding).
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/.." && pwd)
+profiles_dir=${DEVBOX_PROFILES_DIR:-$repo/profiles}
+compose_file=${DEVBOX_COMPOSE_FILE:-$repo/compose/devbox.compose.yaml}
+slr_src=${SLR_SRC:-$HOME/.cache/devbox/slr-src}
+
+die() { echo "devbox: $*" >&2; exit 1; }
+
+usage() {
+  sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+  echo ""
+  echo "profiles: $(cd "$profiles_dir" && ls ./*.yaml 2>/dev/null | sed 's|\./||;s|\.yaml||' | tr '\n' ' ')"
+  exit "${1:-1}"
+}
+
+# The host's $DOCKER_HOST points at the legacy colima path, so resolve it here.
+docker_host=${DEVBOX_DOCKER_HOST:-}
+if [ -z "$docker_host" ]; then
+  for sock in "$HOME/.colima/default/docker.sock" "$HOME/.colima/docker.sock"; do
+    [ -S "$sock" ] && { docker_host="unix://$sock"; break; }
+  done
+  [ -n "$docker_host" ] || die "no colima socket found — start it with: colima start"
+fi
+
+# The Homebrew plugins are not on the CLI's search path on Apple Silicon, and
+# without buildx `docker build` silently falls back to the legacy builder (A3).
+docker_config=${DEVBOX_DOCKER_CONFIG:-}
+if [ -z "$docker_config" ]; then
+  docker_config="${XDG_STATE_HOME:-$HOME/.local/state}/devbox/docker"
+  mkdir -p "$docker_config/cli-plugins"
+  for dir in /opt/homebrew/lib/docker/cli-plugins /usr/local/lib/docker/cli-plugins; do
+    [ -d "$dir" ] || continue
+    for plugin in "$dir"/docker-compose "$dir"/docker-buildx; do
+      [ -x "$plugin" ] && ln -sf "$plugin" "$docker_config/cli-plugins/"
+    done
+  done
+  if [ -f "$HOME/.docker/config.json" ] && [ ! -e "$docker_config/config.json" ]; then
+    ln -sf "$HOME/.docker/config.json" "$docker_config/config.json"
+  fi
+fi
+export DOCKER_HOST="$docker_host" DOCKER_CONFIG="$docker_config"
+
+[ "$#" -ge 1 ] || usage 1
+verb=$1
+shift
+case "$verb" in -h|--help|help) usage 0 ;; esac
+
+profile=${1:-}
+project=${2:-}
+[ -n "$profile" ] && [ -n "$project" ] || usage 1
+case "$profile" in */*|*..*) die "profile must be a name, not a path: $profile" ;; esac
+
+profile_file="$profiles_dir/$profile.yaml"
+[ -f "$profile_file" ] || die "no such profile: $profile"
+[ -f "$compose_file" ] || die "no such compose file: $compose_file"
+
+[ -d "$project" ] || die "no such project directory: $project"
+project=$(cd "$project" && pwd -P)
+# Canonical config may not come from the mounted workspace (I6, criterion 9).
+for f in "$profile_file" "$compose_file"; do
+  case "$f" in "$project"/*) die "refusing canonical config inside the project: $f" ;; esac
+done
+# D4 — the project supplies the hooks mount, read-only, so it has to exist.
+[ -d "$project/.git" ] || die "not a git repository: $project (run: git init '$project')"
+[ -d "$project/.git/hooks" ] || mkdir -p "$project/.git/hooks"
+
+# Compose project name: readable, and unique per absolute path so two projects
+# with the same basename cannot collide.
+slug=$(basename "$project" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\{1,\}$//')
+uniq=$(printf '%s' "$project" | shasum -a 256 | cut -c1-8)
+project_name="devbox-$slug-$uniq"
+
+compose() {
+  DEVBOX_REPO="$repo" DEVBOX_PROFILE="$profile" DEVBOX_PROJECT="$project" \
+  DEVBOX_PROJECT_NAME="$project_name" SLR_SRC="$slr_src" \
+  docker compose --profile build -f "$compose_file" -f "$profile_file" "$@"
+}
+
+# doctor reads the *effective* config, so interpolation and profile merges are
+# already resolved before anything is checked (criterion 2).
+doctor() {
+  command -v jq >/dev/null 2>&1 || die "doctor needs jq (brew install jq)"
+  config=$(compose config --format json) || die "docker compose could not resolve $profile"
+  violations=$(printf '%s' "$config" | jq -r --arg project "$project" '
+    .services as $services
+    | [
+        ( $services | to_entries[] | .key as $name | (.value.volumes // [])[]
+          | select(.type == "bind")
+          | select(.source != $project and .source != ($project + "/.git/hooks"))
+          | if (.source | endswith("docker.sock"))
+            then "I2: service \($name) mounts a Docker socket: \(.source)"
+            else "I1: service \($name) mounts a host path: \(.source)" end ),
+        ( $services | to_entries[] | .key as $name | (.value.volumes // [])[]
+          | select(.type != "bind" and .type != "volume")
+          | "I1: service \($name) has mount type \(.type) at \(.target)" ),
+        ( $services | to_entries[] | .key as $name | (.value.volumes // [])[]
+          | select(.source == ($project + "/.git/hooks") and .read_only != true)
+          | "D4: service \($name) mounts .git/hooks read-write" ),
+        ( $services | to_entries[] | select(.value.privileged == true)
+          | "I3: service \(.key) is privileged" ),
+        ( $services | to_entries[] | select((.value.cap_add // []) | length > 0)
+          | "I3: service \(.key) adds capabilities: \(.value.cap_add | join(","))" ),
+        ( $services | to_entries[] | select((.value.devices // []) | length > 0)
+          | "I3: service \(.key) maps devices" ),
+        ( $services | to_entries[] | select(.value.network_mode == "host")
+          | "I3: service \(.key) uses the host network" ),
+        ( $services | to_entries[] | select(.value.pid == "host")
+          | "I3: service \(.key) shares the host PID namespace" ),
+        ( $services | to_entries[] | select(.value.ipc == "host")
+          | "I3: service \(.key) shares the host IPC namespace" ),
+        ( (.volumes // {}) | to_entries[] | select(.value.driver_opts.device != null)
+          | "I1: volume \(.key) is a host path: \(.value.driver_opts.device)" )
+      ] | .[]')
+  if [ -n "$violations" ]; then
+    printf '%s\n' "$violations" | sed 's/^/devbox doctor: /' >&2
+    die "doctor failed — $profile violates I1–I4"
+  fi
+  echo "devbox doctor: ok — profile $profile, project $project"
+}
+
+case "$verb" in
+  up)     compose up -d --build devbox ;;
+  shell)  compose exec devbox /bin/zsh -l ;;
+  down)   compose down -v --remove-orphans ;;
+  doctor) doctor ;;
+  *)      usage 1 ;;
+esac

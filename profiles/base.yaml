@@ -1,0 +1,11 @@
+# Profile: base — the bare dev container.
+#
+# Base image only: no toolchain layer, no harness. It is the reference profile
+# `devbox doctor` is exercised against, and the shape every other profile extends.
+services:
+  devbox:
+    build:
+      context: ${DEVBOX_REPO:?set by bin/devbox}
+      dockerfile: images/base/Dockerfile
+      args:
+        HARNESS: none
