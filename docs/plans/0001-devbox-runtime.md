@@ -103,6 +103,31 @@ into the canonical form, and service images remain pinned upstream images that
 never derive from `images/base` (A5). Belongs in a new plan (0003), with slice 4's
 postgres service as its first increment.
 
+**Amendment A7 (2026-09-26, slice-3 decisions the plan left open).**
+
+1. **A profile is a compose override.** `compose/devbox.compose.yaml` is the canonical
+   skeleton; `profiles/<name>.yaml` merges on top of it
+   (`docker compose -f … -f profiles/<p>.yaml`, plus `--profile build`) and supplies the
+   toolchain layer, the harness and any services. No shell YAML parsing exists
+   anywhere, and `doctor` inspects the *effective* config. The base→leaf chain is a
+   `devbox-base` service (`profiles: ["build"]`, tagged `devbox/base-<profile>:local`)
+   that leaf layers consume as `additional_contexts: {base: service:devbox-base}`
+   (A3.1): always built, never started.
+2. **`doctor` needs `jq`** — a host prerequisite, present here (1.8.2). It checks the
+   resolved JSON for a bind allowlist (the project, plus a read-only `.git/hooks`, D4),
+   any other mount type, top-level volumes carrying a `driver_opts.device`,
+   `privileged`, `cap_add`, `devices`, and `network_mode`/`pid`/`ipc: host`.
+   `type=volume` stays clean (criterion 2, D10), which the clean `sbcl` profile
+   demonstrates in the suite.
+3. **Seams for tests and overrides:** `DEVBOX_PROFILES_DIR`, `DEVBOX_COMPOSE_FILE`,
+   `DEVBOX_DOCKER_HOST`, `DEVBOX_DOCKER_CONFIG`. Canonical config that resolves inside
+   the project is refused (criterion 9's guard), and that refusal is tested too.
+4. **`up` requires a git project**, because D4's `.git/hooks` mount has to exist.
+   **`down` drops volumes** (`-v`) — that is what removes the anonymous `.slr` volume
+   (D10), and it will drop slice 4's postgres data as well: destructive by design.
+5. Budget: no row changed except this file's own; the five slice-3 rows land under
+   their estimates (140/61/11/24/22/85 against 185/62/25/27/25/95).
+
 ## Goal
 
 A container runtime on macOS that hands an agentic harness a disposable
@@ -205,7 +230,7 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 444 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 469 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
