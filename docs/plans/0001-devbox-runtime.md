@@ -89,6 +89,20 @@ file and one `pi` binary in each of the three images, zero harness or agent name
 under `images/`. A service image never derives from `images/base`, so it can never
 inherit a harness (relevant to the service flexibility noted above).
 
+**Amendment A6 (2026-09-25, developer decision — recorded for a future plan, not
+scope here).** When an agent configures something inside a running container and it
+should be reusable, the saved artifact is a **reviewed recipe**, not a snapshot:
+`devbox save <name>` proposes an `images/<name>/Dockerfile` (or a profile/service
+fragment) built from a thin install-recorder plus `docker diff`, prints it for the
+developer, and writes it into this repo only on confirmation. Rejected: an opaque
+`docker commit` (the host would later run content nobody read — the T4/I6 shape —
+with no rebase path onto a new base), a persistent environment volume (invisible
+drift), and no capture at all (every ad-hoc setup stays throwaway). Consequence:
+tiers stay one mechanism — a layer or a profile entry — so ad-hoc work converges
+into the canonical form, and service images remain pinned upstream images that
+never derive from `images/base` (A5). Belongs in a new plan (0003), with slice 4's
+postgres service as its first increment.
+
 ## Goal
 
 A container runtime on macOS that hands an agentic harness a disposable
@@ -191,7 +205,7 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 430 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 444 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
