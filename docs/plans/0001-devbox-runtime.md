@@ -357,7 +357,7 @@ YAML + Markdown.
 | `README.md` | 94 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 596 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 602 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 64 |
@@ -462,8 +462,14 @@ from a real crash — and the container's PIDs land in a host-visible file, a de
 `<project>/.slr` removes all four. Verified end-to-end: the container's socket
 lands on ext4 (`/dev/vdb1`, no `EINVAL`), `slr "(+ 11 31)"` → `=> 42` with the
 image reused on the next call, the host's `.slr/` is shadowed with its file
-untouched, and `docker rm -v` takes the volume with it. The volume is anonymous
-(disposable by premise), so `devbox down` must remove it with the container.
+untouched, and `docker rm -v` takes the volume with it. The volume is **named** —
+`devbox-<project>-slr`, deterministic so that `devbox down` can remove it whatever
+the container's state (running, stopped, or already deleted), by matching the
+`com.docker.compose.project` and `com.docker.compose.volume=devbox-slr` labels. That
+*logical* name is load-bearing: a profile that renames it would leave the volume
+behind, so profiles keep it (the mechanism was tightened after review — A8, A15).
+Service volumes carry a different logical name, survive `down`, and go only with
+`--purge`.
 *Rejected:* the shared mount — the interference makes a false "session lost"
 indistinguishable from a real one, which is worse than the visibility it buys.
 *Rejected:* `SLR_SOCKET` redirection — unusable in the case that matters, because
