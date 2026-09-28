@@ -174,6 +174,16 @@ env-injected `core.hooksPath` pointing at a devbox-provided hook directory, whic
 the agent cannot reach in the repo) is a plan-0003 question, as is the re-review
 that open question A9.2(a)–(b) needs for worktrees inside a read-only gitdir.
 
+**Amendment A11 (2026-09-26, developer decision — where a commit policy lives).**
+A project's commit policy is machine-local operational state: `devbox policy <mode>
+<project>` (with `--list`) records it in `~/.local/state/devbox/policy.yaml`, keyed by
+absolute project path, and `up` resolves the mode from there. Nothing inside a
+mounted workspace can change it (I6), and this repo stays free of host paths.
+Rejected: a policy file in this repo (machine paths committed to a public repo), a
+flag repeated at every `up` (fails unsafe the moment it is forgotten), and a file in
+the project (the restricted party could rewrite its own restriction). With nothing
+recorded the mode stays "commits allowed", authored as the developer.
+
 ## Goal
 
 A container runtime on macOS that hands an agentic harness a disposable
@@ -276,7 +286,7 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 515 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 525 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
