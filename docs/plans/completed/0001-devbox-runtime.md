@@ -357,7 +357,7 @@ YAML + Markdown.
 | `README.md` | 94 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 626 |
+| `docs/plans/completed/0001-devbox-runtime.md` (this file) | 626 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 64 |
