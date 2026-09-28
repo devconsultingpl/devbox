@@ -5,7 +5,7 @@
 #
 # The violating profiles are generated into a scratch dir under $HOME and pointed
 # at with DEVBOX_PROFILES_DIR, so nothing is ever written into the repo or into a
-# project (doctor refuses canonical config that resolves inside the project).
+# project (and doctor refuses canonical config that resolves inside the project).
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -22,17 +22,21 @@ export DANGEROUS_SRC=/etc
 pass=0
 fail=0
 expect() { # expect <ok|deny> <name> [env ...]
-  want=$1
-  name=$2
-  shift 2
+  want=$1; name=$2; shift 2
   if "$@" "$devbox" doctor "$name" "$project" > "$work/out" 2>&1; then got=ok; else got=deny; fi
   if [ "$got" = "$want" ]; then
-    pass=$((pass + 1))
-    printf 'ok    %-14s %s\n' "$name" "$want"
+    pass=$((pass + 1)); printf 'ok    %-14s %s\n' "$name" "$want"
   else
-    fail=$((fail + 1))
-    printf 'FAIL  %-14s wanted %s, got %s\n' "$name" "$want" "$got"
+    fail=$((fail + 1)); printf 'FAIL  %-14s wanted %s, got %s\n' "$name" "$want" "$got"
     sed 's/^/      /' "$work/out"
+  fi
+}
+
+message() { # message <pattern> <label> — assert what the last doctor run said
+  if grep -q "$1" "$work/out"; then
+    pass=$((pass + 1)); printf 'ok    %-14s message\n' "$2"
+  else
+    fail=$((fail + 1)); printf 'FAIL  %-14s no: %s\n' "$2" "$1"; sed 's/^/      /' "$work/out"
   fi
 }
 
@@ -49,6 +53,7 @@ profile i1-host-bind '    volumes: ["/etc:/host-etc:ro"]'
 expect deny i1-host-bind
 profile i1-var-bind '    volumes: ["${DANGEROUS_SRC}:/host-etc:ro"]'
 expect deny i1-var-bind
+message 'I1: service devbox mounts a host path: /etc' 'i1-var-bind'
 profile i1-driver '    volumes: ["probe:/probe"]
 volumes:
   probe:
@@ -78,8 +83,13 @@ expect deny i3-network
 profile i4-ssh "    volumes: [\"$HOME/.ssh:/root/.ssh:ro\"]"
 expect deny i4-ssh
 
-# Criterion 9 — canonical config may not resolve inside the project.
+# Criterion 9 — canonical config may not resolve inside the project. Each case must
+# clear the earlier checks, or the refusal under test never fires.
+cp "$root/profiles/base.yaml" "$project/base.yaml"
 expect deny base env DEVBOX_PROFILES_DIR="$project"
+message 'refusing canonical config inside the project' 'profile-in-project'
+expect deny base env DEVBOX_PROFILES_DIR="$root/profiles" DEVBOX_COMPOSE_FILE="$project/base.yaml"
+message 'refusing canonical config inside the project' 'compose-in-project'
 
 printf '\n%s ok, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
