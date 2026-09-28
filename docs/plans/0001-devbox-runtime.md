@@ -357,7 +357,7 @@ YAML + Markdown.
 | `README.md` | 94 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 602 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 621 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 64 |
@@ -372,7 +372,7 @@ YAML + Markdown.
 | `profiles/sbcl.yaml` | 27 |
 | `profiles/go-postgres.yaml` | 25 |
 | `tests/doctor.test.sh` | 95 |
-| **Total** | **~1650–1720** |
+| **Total** | **~1700–1780** |
 
 Application logic ≈ 270 lines (`bin/devbox` + harness scripts). Everything else
 is declarative config, docs, or tests. Growth beyond ~1400 without an updated
@@ -558,7 +558,26 @@ claims into facts before the CLI is designed around them.
 
 ## Review log
 
-_Empty — populated by `/skill:code-review` after implementation._
+**Round 1 (2026-09-26) — scope: all of `main`; delta `f138d15`, `af28d6a`, `59b548d`,
+`4e6a340`.** 2 bugs and 2 spec violations, all fixed and verified; details in A15.
+
+- `devbox down` orphaned `.slr`'s volume whenever no *running* container existed — after
+  a reboot, a `docker stop`, or a container deleted by hand. `down` now resolves the
+  volume through compose's labels and removes it in every state; service volumes carry a
+  different logical name and survive `down`.
+- The criterion-9 test passed for the wrong reason (the fixture project held no profile,
+  so "no such profile" fired before the guard). The fixture now carries one, both guards
+  are exercised, and making the guard inert turns the suite red (14 ok, 4 failed)
+  instead of leaving it green.
+- `profiles/go-postgres.yaml` described the pre-A8 lifecycle; corrected to "survives
+  `down`, dropped by `--purge`".
+- Repository initialisation ran for every verb, so `doctor` mutated the project. Only
+  `up` establishes a repository now; the no-nesting refusal still covers every verb.
+
+**Round 2 (2026-09-26) — same scope.** 0 bugs, 1 spec violation: D10's live text still
+called the volume anonymous after A15 made it named. D10 now states the delivered
+mechanism and its load-bearing logical name (commit `e2ecd4d`). The reviewer's preferences
+stay as recorded in A15 and are not acted on.
 
 ## Appendix A — ADR draft: sandbox trust posture
 
