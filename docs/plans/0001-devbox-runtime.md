@@ -210,6 +210,12 @@ reviewed-recipe capture exists to make permanent. Data survives `devbox down` an
 removed by `down --purge` (A8, confirmed against a real row: `1 | 42` before and
 after a full cycle).
 
+**Amendment A14 (2026-09-26, budget rows for the two documents of steps 8–9).**
+`README.md` 90 → 94 and `docs/decisions/0001-sandbox-trust-posture.md` 60 → 64: the
+estimates did not anticipate the usage/prerequisites sections or the named-residuals
+block, both of which criterion 10 and the posture's honesty require. No scope change.
+Rows updated above; the total stays inside its range.
+
 ## Goal
 
 A container runtime on macOS that hands an agentic harness a disposable
@@ -309,13 +315,13 @@ YAML + Markdown.
 
 | File | Est. physical lines |
 |---|---|
-| `README.md` | 90 |
+| `README.md` | 94 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 551 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 557 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
-| `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
+| `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 64 |
 | `images/base/Dockerfile` | 55 |
 | `images/sbcl/Dockerfile` | 35 |
 | `images/go/Dockerfile` | 30 |
@@ -327,7 +333,7 @@ YAML + Markdown.
 | `profiles/sbcl.yaml` | 27 |
 | `profiles/go-postgres.yaml` | 25 |
 | `tests/doctor.test.sh` | 95 |
-| **Total** | **~1520–1590** |
+| **Total** | **~1650–1720** |
 
 Application logic ≈ 270 lines (`bin/devbox` + harness scripts). Everything else
 is declarative config, docs, or tests. Growth beyond ~1400 without an updated
