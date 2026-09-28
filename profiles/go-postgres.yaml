@@ -1,7 +1,7 @@
 # Profile: go-postgres — Go toolchain (harness pi) plus a postgres service: pinned
-# upstream image, private `devbox` network, no host port (criterion 6), data in an
-# anonymous volume — dropped with the project by `devbox down -v`. Slice 4 verifies
-# the session; the profile is authored here so `doctor` covers it.
+# upstream image, private `devbox` network, no host port (criterion 6), data in a
+# named volume that survives `devbox down` and goes only on `down --purge` (A8).
+# Slice 4 verifies the session; the profile is authored here so `doctor` covers it.
 services:
   devbox-base:
     build:
