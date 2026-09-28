@@ -357,7 +357,7 @@ YAML + Markdown.
 | `README.md` | 94 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 621 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 626 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 64 |
@@ -558,8 +558,8 @@ claims into facts before the CLI is designed around them.
 
 ## Review log
 
-**Round 1 (2026-09-26) — scope: all of `main`; delta `f138d15`, `af28d6a`, `59b548d`,
-`4e6a340`.** 2 bugs and 2 spec violations, all fixed and verified; details in A15.
+**Round 1 (2026-09-26) — scope: all of `main` at `3623598` (18 commits since
+`5d8108d`).** 2 bugs and 2 spec violations, all fixed and verified; details in A15.
 
 - `devbox down` orphaned `.slr`'s volume whenever no *running* container existed — after
   a reboot, a `docker stop`, or a container deleted by hand. `down` now resolves the
@@ -574,10 +574,15 @@ claims into facts before the CLI is designed around them.
 - Repository initialisation ran for every verb, so `doctor` mutated the project. Only
   `up` establishes a repository now; the no-nesting refusal still covers every verb.
 
-**Round 2 (2026-09-26) — same scope.** 0 bugs, 1 spec violation: D10's live text still
-called the volume anonymous after A15 made it named. D10 now states the delivered
-mechanism and its load-bearing logical name (commit `e2ecd4d`). The reviewer's preferences
-stay as recorded in A15 and are not acted on.
+**Round 2 (2026-09-26) — same scope; delta `f138d15`, `af28d6a`, `59b548d`, `4e6a340`,
+the round-1 fixes.** 0 bugs, 1 spec violation: D10's live text still called the volume
+anonymous after A15 made it named. D10 now states the delivered mechanism and its
+load-bearing logical name (commit `e2ecd4d`). The reviewer's preferences stay as recorded
+in A15 and are not acted on.
+
+**Round 3 (2026-09-26) — same scope; delta `e2ecd4d`, `215175c`.** 0 bugs, 0 spec
+violations; the only notes left are preferences. C1–C11 re-verified on this tree, and the
+developer signed the plan off on 2026-09-26: it moves to `docs/plans/completed/`.
 
 ## Appendix A — ADR draft: sandbox trust posture
 
