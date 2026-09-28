@@ -184,6 +184,15 @@ flag repeated at every `up` (fails unsafe the moment it is forgotten), and a fil
 the project (the restricted party could rewrite its own restriction). With nothing
 recorded the mode stays "commits allowed", authored as the developer.
 
+**Amendment A12 (2026-09-26, developer decision — the proposal file).** In
+review-only mode the agent's output is **`COMMIT_PROPOSAL.md` at the project root**:
+the proposed message, the reasoning, and the files involved, rewritten for each
+proposal (a review queue, not a log), and deliberately *not* gitignored so `ls` and
+`git status` keep showing it as untracked rather than letting it hide. That closes
+the git-workflow questions opened in A9.2 and answered across A10–A11; what is left
+for plan 0003 is the mechanism guarding "no AI attribution" and the worktree
+bookkeeping (per-feature container name, per-feature `.slr` volume).
+
 ## Goal
 
 A container runtime on macOS that hands an agentic harness a disposable
@@ -286,7 +295,7 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 525 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 534 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
