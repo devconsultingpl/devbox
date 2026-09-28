@@ -1,6 +1,6 @@
 # 0001 — Sandbox trust posture: isolate by container, control by capability
 
-**Status:** accepted (2026-09-26). Filed from `docs/plans/0001-devbox-runtime.md`
+**Status:** accepted (2026-09-26). Filed from `docs/plans/completed/0001-devbox-runtime.md`
 (Appendix A); the plan is the specification, this file is the durable *why*.
 
 ## Context

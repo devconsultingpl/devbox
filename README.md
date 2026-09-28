@@ -90,5 +90,5 @@ $ git -C <slr checkout> archive HEAD | tar -x -C ~/.cache/devbox/slr-src
 | `images/*/Dockerfile` | toolchain layers (`base` → `sbcl`, `go`, …) |
 | `harnesses/*.sh` | the harness seam: exactly one applied per image |
 | `tests/doctor.test.sh` | invariant tests, one per I1–I4 |
-| `docs/plans/0001-*` | the specification this repo is built to |
+| `docs/plans/completed/0001-*` | the specification this repo is built to |
 | `docs/decisions/` | the durable *why* behind the posture |
