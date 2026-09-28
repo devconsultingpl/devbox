@@ -160,6 +160,20 @@ named data volume keeps it across `down` and loses it to `down --purge`. Budget:
    file's name, and where the per-project policy canonically lives (I6 forbids reading
    it from the mounted workspace).
 
+**Amendment A10 (2026-09-26, developer decision — how review-only is enforced).**
+In a review-only project the container mounts the working tree read-write and the
+git directory **read-only** (plus `GIT_OPTIONAL_LOCKS=0`), so `git status`, `diff`
+and `log` stay clean while `git commit` fails at the filesystem level: the agent
+physically cannot write objects or refs, needs no cooperation, and `--no-verify`
+buys nothing. Branches and worktrees are host-side operations in that mode. The
+agent's output is a commit proposal in a fixed file in the project root, which the
+developer commits from the host. Commits are authored as the developer, identity
+injected from the host git config (a name and an email, no secret); how the
+no-AI-attribution rule is guarded (a host-provided `commit-msg` hook versus an
+env-injected `core.hooksPath` pointing at a devbox-provided hook directory, which
+the agent cannot reach in the repo) is a plan-0003 question, as is the re-review
+that open question A9.2(a)–(b) needs for worktrees inside a read-only gitdir.
+
 ## Goal
 
 A container runtime on macOS that hands an agentic harness a disposable
@@ -262,7 +276,7 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 501 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 515 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
