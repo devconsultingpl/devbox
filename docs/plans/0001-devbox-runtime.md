@@ -193,6 +193,23 @@ the git-workflow questions opened in A9.2 and answered across A10–A11; what is
 for plan 0003 is the mechanism guarding "no AI attribution" and the worktree
 bookkeeping (per-feature container name, per-feature `.slr` volume).
 
+**Amendment A13 (2026-09-26, slice-4 verification facts — no scope change).**
+Criterion 6 is verified end to end: `devbox up go-postgres` starts the box and a
+`postgres:17-alpine` service on the compose network; inside the box `go version`
+works, `psql -h postgres -U devbox -d devbox` answers `db=devbox usr=devbox`, and a
+stdlib Go program dials `postgres:5432` → `172.20.0.2:5432`. Nothing is published:
+`docker port` is empty and `Ports={"5432/tcp":null}`; the service container mounts
+nothing host-side and cannot see `/Users` or `/opt/homebrew`. The profile now sets
+`POSTGRES_USER: devbox` (same budget row) so the documented role exists. Two
+observations worth keeping: **(a)** the host's port 5432 is busy with an unrelated
+`ssh` forward and a foreign project's container publishing it — not this runtime, so
+a later "5432 is open on the host" reading must not be attributed to devbox;
+**(b)** the box has no postgres client by default — installing one inside the session
+is allowed (D8) but dies with the container, which is exactly the case A6's
+reviewed-recipe capture exists to make permanent. Data survives `devbox down` and is
+removed by `down --purge` (A8, confirmed against a real row: `1 | 42` before and
+after a full cycle).
+
 ## Goal
 
 A container runtime on macOS that hands an agentic harness a disposable
@@ -295,7 +312,7 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 534 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 551 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
