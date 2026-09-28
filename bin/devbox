@@ -82,17 +82,21 @@ project=$(cd "$project" && pwd -P)
 for f in "$profile_file" "$compose_file"; do
   case "$f" in "$project"/*) die "refusing canonical config inside the project: $f" ;; esac
 done
-# D4 — the project supplies the hooks mount read-only, so a repository has to
-# exist. One is created when it is missing, but never nested inside another: a
-# devbox pointed at a subdirectory of a repo is a mistake worth stopping on.
+# A project inside another repository is a mistake for every verb, but only `up`
+# creates or repairs a repository: `doctor`, `shell` and `down` are read-only with
+# respect to the project (A9.1, narrowed by review round 1).
 top=$(git -C "$project" rev-parse --show-toplevel 2>/dev/null || true)
-if [ -z "$top" ]; then
-  echo "devbox: no repository at $project — initialising one" >&2
-  git -C "$project" init -q
-  top=$(git -C "$project" rev-parse --show-toplevel)
-fi
-[ "$top" = "$project" ] || die "$project is inside the repository at $top — point devbox at the repository root"
-[ -d "$project/.git/hooks" ] || mkdir -p "$project/.git/hooks"
+[ -z "$top" ] || [ "$top" = "$project" ] ||
+  die "$project is inside the repository at $top — point devbox at the repository root"
+
+# D4 — `up` mounts the hooks directory read-only, so it has to exist.
+ensure_repository() {
+  if [ -z "$top" ]; then
+    echo "devbox: no repository at $project — initialising one" >&2
+    git -C "$project" init -q
+  fi
+  [ -d "$project/.git/hooks" ] || mkdir -p "$project/.git/hooks"
+}
 
 # Compose project name: readable, and unique per absolute path so two projects
 # with the same basename cannot collide.
@@ -104,14 +108,6 @@ compose() {
   DEVBOX_REPO="$repo" DEVBOX_PROFILE="$profile" DEVBOX_PROJECT="$project" \
   DEVBOX_PROJECT_NAME="$project_name" SLR_SRC="$slr_src" \
   docker compose --profile build -f "$compose_file" -f "$profile_file" "$@"
-}
-
-# `down` never leaves slr's state behind (D10) but must not take service data with
-# it: the .slr volume is anonymous, so read its name off the container first.
-slr_volume() {
-  id=$(compose ps -q devbox 2>/dev/null | head -1)
-  [ -n "$id" ] || return 0
-  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/workspace/.slr"}}{{.Name}}{{end}}{{end}}' "$id"
 }
 
 # doctor reads the *effective* config, so interpolation and profile merges are
@@ -157,18 +153,22 @@ doctor() {
 }
 
 case "$verb" in
-  up)     compose up -d --build devbox ;;
+  up)     ensure_repository; compose up -d --build devbox ;;
   shell)  compose exec devbox /bin/zsh -l ;;
   down)
     if [ "$purge" = 1 ]; then
       compose down -v --remove-orphans
     else
-      slr=$(slr_volume)
       compose down --remove-orphans
-      if [ -n "$slr" ]; then
-        docker volume rm "$slr" >/dev/null
-        echo "devbox: removed slr volume $slr (D10)"
-      fi
+      # D10: slr's state never survives the box. Resolve it through compose's own
+      # labels rather than by inspecting a container, so a stopped, rebooted or
+      # already-deleted container cannot orphan it. Service data (postgres) carries a
+      # different logical name and is left to `--purge`.
+      for v in $(docker volume ls -q \
+                   --filter label=com.docker.compose.project="$project_name" \
+                   --filter label=com.docker.compose.volume=devbox-slr); do
+        docker volume rm "$v" >/dev/null && echo "devbox: removed slr volume $v (D10)"
+      done
     fi
     ;;
   doctor) doctor ;;
