@@ -210,6 +210,45 @@ reviewed-recipe capture exists to make permanent. Data survives `devbox down` an
 removed by `down --purge` (A8, confirmed against a real row: `1 | 42` before and
 after a full cycle).
 
+**Amendment A15 (2026-09-26, review round 1 — two bugs and two spec violations,
+all fixed).**
+
+1. **Bug — `down` orphaned `.slr`'s volume with no *running* container.**
+   `compose ps -q` lists running containers only, so after a reboot, a
+   `docker stop`, or a container someone deleted, the volume leaked — contradicting
+   A8 and D10. **Fix:** `down` no longer inspects containers. `.slr` is a named
+   volume (`devbox-<project>-slr`, `profiles/sbcl.yaml`) and `down` removes it
+   through compose's own labels (`com.docker.compose.project` plus
+   `com.docker.compose.volume=devbox-slr`), which survive every container state.
+   Verified in three states — running, stopped, container deleted by hand — and
+   against service data: postgres's volume carries a different logical name, survives
+   `down`, and dies only with `--purge`. Residual: renaming the logical volume in a
+   future profile would stop `down` finding it, so that name is a documented contract
+   between profile and CLI.
+2. **Bug — the criterion-9 test passed for the wrong reason.** Its fixture project had
+   no `base.yaml`, so "no such profile" fired before the guard and the refusal was
+   never exercised (A7.3 claimed it was tested). **Fix:** the fixture carries a profile
+   *inside* the project, both guards (profiles dir, compose file) are exercised, and
+   each asserts the guard's own message. Discrimination verified: making the guard's
+   pattern inert turns the suite red (14 ok, 4 failed); restoring gives 18 ok, 0 failed.
+3. **Spec violation — `profiles/go-postgres.yaml` described the pre-A8 lifecycle**
+   ("dropped with the project by `devbox down -v`", an option the CLI rejects).
+   Rewritten to the A8 truth: the data volume survives `down`, and `--purge` drops it.
+4. **Spec violation — repository initialisation ran for every verb**, so `doctor`
+   (documented as read-only) created a `.git`, and a typo'd project path grew one.
+   **Fix:** only `up` establishes a repository (`ensure_repository`); the "inside
+   another repository" refusal still applies to every verb because it is a read-only
+   sanity check. Verified: `doctor`, `down` and `shell` on a fresh directory leave no
+   `.git`; `up` initialises one; all four verbs refuse `<repo>/sub`.
+
+Budget after the fixes: `bin/devbox` 176/185, `tests/doctor.test.sh` 95/95,
+`profiles/sbcl.yaml` 27/27, `profiles/go-postgres.yaml` 25/25. The review's
+preferences (stale status header, `images/*` comments naming the old layer and tag,
+the I1–I6 scope line in `compose/`, the environment note in `harnesses/pi.sh`,
+`--help` behind the socket check, `--purge` accepted by verbs that ignore it, unpinned
+pi, the bare `mkdir` error on a worktree root) are recorded as **not acted on** this
+round.
+
 **Amendment A14 (2026-09-26, budget rows for the two documents of steps 8–9).**
 `README.md` 90 → 94 and `docs/decisions/0001-sandbox-trust-posture.md` 60 → 64: the
 estimates did not anticipate the usage/prerequisites sections or the named-residuals
@@ -318,7 +357,7 @@ YAML + Markdown.
 | `README.md` | 94 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 557 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 596 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 64 |
