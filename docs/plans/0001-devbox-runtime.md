@@ -128,6 +128,18 @@ postgres service as its first increment.
 5. Budget: no row changed except this file's own; the five slice-3 rows land under
    their estimates (140/61/11/24/22/85 against 185/62/25/27/25/95).
 
+**Amendment A8 (2026-09-26, developer decision — volume lifecycle of `down`).**
+`devbox down` no longer passes `-v`. It stops and removes the container and the
+network, and then removes the `.slr` volume explicitly, reading its name off the
+container's mounts before the container goes away. The volume therefore stays
+**anonymous** (D10 unchanged) and still never survives a box, while service data —
+slice 4's postgres data, declared as a named volume in its profile — survives a
+routine stop. `devbox down --purge` keeps the old all-or-nothing behaviour
+(`docker compose down -v`) for a clean slate. Verified: an up/down cycle creates
+exactly one anonymous volume and leaves nothing behind, and a probe profile with a
+named data volume keeps it across `down` and loses it to `down --purge`. Budget:
+`bin/devbox` 168/185, `profiles/go-postgres.yaml` 25/25.
+
 ## Goal
 
 A container runtime on macOS that hands an agentic harness a disposable
@@ -230,7 +242,7 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 469 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 481 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
