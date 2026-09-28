@@ -82,8 +82,16 @@ project=$(cd "$project" && pwd -P)
 for f in "$profile_file" "$compose_file"; do
   case "$f" in "$project"/*) die "refusing canonical config inside the project: $f" ;; esac
 done
-# D4 — the project supplies the hooks mount, read-only, so it has to exist.
-[ -d "$project/.git" ] || die "not a git repository: $project (run: git init '$project')"
+# D4 — the project supplies the hooks mount read-only, so a repository has to
+# exist. One is created when it is missing, but never nested inside another: a
+# devbox pointed at a subdirectory of a repo is a mistake worth stopping on.
+top=$(git -C "$project" rev-parse --show-toplevel 2>/dev/null || true)
+if [ -z "$top" ]; then
+  echo "devbox: no repository at $project — initialising one" >&2
+  git -C "$project" init -q
+  top=$(git -C "$project" rev-parse --show-toplevel)
+fi
+[ "$top" = "$project" ] || die "$project is inside the repository at $top — point devbox at the repository root"
 [ -d "$project/.git/hooks" ] || mkdir -p "$project/.git/hooks"
 
 # Compose project name: readable, and unique per absolute path so two projects
