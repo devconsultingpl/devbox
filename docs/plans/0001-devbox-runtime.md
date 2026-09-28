@@ -140,6 +140,26 @@ exactly one anonymous volume and leaves nothing behind, and a probe profile with
 named data volume keeps it across `down` and loses it to `down --purge`. Budget:
 `bin/devbox` 168/185, `profiles/go-postgres.yaml` 25/25.
 
+**Amendment A9 (2026-09-26, developer decisions).**
+
+1. **`up` initialises a repository when the project has none**, instead of refusing:
+   `git -C <project> rev-parse --show-toplevel` decides. No repository → `git init -q`
+   (a brand-new project is a normal case); a project sitting *inside* another
+   repository is refused rather than nested ("point devbox at the repository root"),
+   which is the failure that would otherwise create a repo inside a repo. D4's
+   read-only hooks mount is unaffected. Verified: a fresh directory gets a
+   repository and a box; `<repo>/sub` is refused with the root hint.
+2. **Recorded, not started (developer input) — a git workflow feature, its own plan.**
+   (a) a *worktree per feature* so several lines of work proceed in parallel inside
+   one project; (b) I1 already decides where they live — beside the project would need
+   a second host mount for the worktree's gitdir, so the only I1-compatible shape is
+   under `<project>/…` (gitignored); (c) every commit is authored as the developer,
+   with no AI attribution anywhere; (d) per project, a mode in which agents may not
+   commit **at all** — they leave a commit proposal in a fixed file in the project root
+   for review. Open questions for that plan: the enforcement mechanism, the proposal
+   file's name, and where the per-project policy canonically lives (I6 forbids reading
+   it from the mounted workspace).
+
 ## Goal
 
 A container runtime on macOS that hands an agentic harness a disposable
@@ -242,7 +262,7 @@ YAML + Markdown.
 | `README.md` | 90 |
 | `.gitignore` | 11 |
 | `AGENTS.md` | 56 |
-| `docs/plans/0001-devbox-runtime.md` (this file) | 481 |
+| `docs/plans/0001-devbox-runtime.md` (this file) | 501 |
 | `docs/plans/0002-devbox-orchestrator.md` (sibling plan) | 233 |
 | `docs/plans/backlog.md` | 61 |
 | `docs/decisions/0001-sandbox-trust-posture.md` (from Appendix A) | 60 |
