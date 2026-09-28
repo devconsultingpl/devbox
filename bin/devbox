@@ -3,7 +3,7 @@
 #
 #   devbox up     <profile> <project>   build and start the box, detached
 #   devbox shell  <profile> <project>   shell into the running box
-#   devbox down   <profile> <project>   stop it, remove it, drop its volumes (D10)
+#   devbox down   <profile> <project>   stop and remove it; --purge also drops data
 #   devbox doctor <profile> <project>   validate the effective config (I1–I4)
 #
 # Canonical config resolves from this repo, never from the mounted project
@@ -58,6 +58,15 @@ verb=$1
 shift
 case "$verb" in -h|--help|help) usage 0 ;; esac
 
+purge=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --purge) purge=1; shift ;;
+    --*) die "unknown option: $1" ;;
+    *) break ;;
+  esac
+done
+
 profile=${1:-}
 project=${2:-}
 [ -n "$profile" ] && [ -n "$project" ] || usage 1
@@ -87,6 +96,14 @@ compose() {
   DEVBOX_REPO="$repo" DEVBOX_PROFILE="$profile" DEVBOX_PROJECT="$project" \
   DEVBOX_PROJECT_NAME="$project_name" SLR_SRC="$slr_src" \
   docker compose --profile build -f "$compose_file" -f "$profile_file" "$@"
+}
+
+# `down` never leaves slr's state behind (D10) but must not take service data with
+# it: the .slr volume is anonymous, so read its name off the container first.
+slr_volume() {
+  id=$(compose ps -q devbox 2>/dev/null | head -1)
+  [ -n "$id" ] || return 0
+  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/workspace/.slr"}}{{.Name}}{{end}}{{end}}' "$id"
 }
 
 # doctor reads the *effective* config, so interpolation and profile merges are
@@ -134,7 +151,18 @@ doctor() {
 case "$verb" in
   up)     compose up -d --build devbox ;;
   shell)  compose exec devbox /bin/zsh -l ;;
-  down)   compose down -v --remove-orphans ;;
+  down)
+    if [ "$purge" = 1 ]; then
+      compose down -v --remove-orphans
+    else
+      slr=$(slr_volume)
+      compose down --remove-orphans
+      if [ -n "$slr" ]; then
+        docker volume rm "$slr" >/dev/null
+        echo "devbox: removed slr volume $slr (D10)"
+      fi
+    fi
+    ;;
   doctor) doctor ;;
   *)      usage 1 ;;
 esac
