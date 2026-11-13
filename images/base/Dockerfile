@@ -45,7 +45,7 @@ ZSHRC
 
 RUN chsh -s /usr/bin/zsh root
 
-WORKDIR /workspace
+WORKDIR /root
 CMD ["/bin/zsh", "-l"]
 
 # The harness seam (D3). HARNESS has no default on purpose: an image with no

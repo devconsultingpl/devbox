@@ -16,7 +16,9 @@ structurally impossible here, not prompt-gated — see `docs/decisions/0001-sand
 
 ## Invariants — violating one re-opens an incident class
 
-- **I1** The only host path mounted into a container is the project directory.
+- **I1** The only host paths mounted into a container are the worktree, its gitdir and the
+  gitdir's hooks (read-only), each mounted at its own absolute host path — never a
+  `/workspace` alias.
 - **I2** Never mount `/var/run/docker.sock` — full host escape.
 - **I3** No `privileged`, `cap_add`, `devices`, `pid/ipc/network_mode: host`.
 - **I4** Never mount or export `~/.aws`, `~/.ssh`, `~/.config/gh`, `~/.docker`,
@@ -67,4 +69,11 @@ redirection at a shared host path; if one could have been written, verify it was
 - `slr` runs in-container (apt `sbcl` + `./install.sh --prefix=/usr/local`); virtiofs makes
   listing `.slr/` error `EINVAL` on the socket node, the host cannot reach the container's
   listener, and host-side and container `slr` on one project interfere via the shared
-  `.slr/` markers.
+  `.slr/` markers. `.slr/` is a volume under the worktree's own path, named per worktree.
+- A worktree's `.git` is a file naming an absolute gitdir, and `<gitdir>/gitdir` points
+  back absolutely; mounting only the worktree gives `fatal: not a git repository`. The
+  box therefore mounts the worktree and the repository's gitdir at those same host paths.
+- Container git is 2.43 while the host may be 2.56: a repo carrying
+  `extensions.relativeworktrees` (written by `git worktree add --relative-paths`) is
+  unreadable in-box, so `up` and `doctor` refuse such a repository up front. `up` also
+  appends `.devbox/` to `<gitdir>/info/exclude`, keeping the worktree home out of status.

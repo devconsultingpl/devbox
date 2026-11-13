@@ -23,7 +23,8 @@ pass=0
 fail=0
 expect() { # expect <ok|deny> <name> [env ...]
   want=$1; name=$2; shift 2
-  if "$@" "$devbox" doctor "$name" "$project" > "$work/out" 2>&1; then got=ok; else got=deny; fi
+  target=${EXPECT_PROJECT:-$project}
+  if "$@" "$devbox" doctor "$name" "$target" > "$work/out" 2>&1; then got=ok; else got=deny; fi
   if [ "$got" = "$want" ]; then
     pass=$((pass + 1)); printf 'ok    %-14s %s\n' "$name" "$want"
   else
@@ -87,9 +88,36 @@ expect deny i4-ssh
 # clear the earlier checks, or the refusal under test never fires.
 cp "$root/profiles/base.yaml" "$project/base.yaml"
 expect deny base env DEVBOX_PROFILES_DIR="$project"
-message 'refusing canonical config inside the project' 'profile-in-project'
+message 'refusing canonical config inside the worktree' 'profile-in-project'
 expect deny base env DEVBOX_PROFILES_DIR="$root/profiles" DEVBOX_COMPOSE_FILE="$project/base.yaml"
-message 'refusing canonical config inside the project' 'compose-in-project'
+message 'refusing canonical config inside the worktree' 'compose-in-project'
+
+# 0003 — the allow-list is the worktree, its gitdir, and the gitdir's hooks (RO).
+# A sibling of the gitdir is not on it, and the hooks mount is the one directory
+# that must stay read-only (D4).
+export DEVBOX_TEST_GITDIR="$project/.git"
+profile gitdir-bind '    volumes: ["${DEVBOX_TEST_GITDIR}:${DEVBOX_TEST_GITDIR}"]'
+expect ok gitdir-bind
+profile hooks-ro '    volumes: ["${DEVBOX_TEST_GITDIR}/hooks:${DEVBOX_TEST_GITDIR}/hooks:ro"]'
+expect ok hooks-ro
+profile hooks-rw '    volumes: ["${DEVBOX_TEST_GITDIR}/hooks:${DEVBOX_TEST_GITDIR}/hooks"]'
+expect deny hooks-rw
+message 'D4: service devbox mounts the hooks directory read-write' 'hooks-rw'
+profile sibling-bind '    volumes: ["${DEVBOX_TEST_GITDIR}/../sibling:/sibling"]'
+expect deny sibling-bind
+
+# A worktree outside the repository is a box root of its own, and its gitdir is
+# the repository's common gitdir (0003 D1).
+git -C "$project" worktree add -q "$work/wt" -b wt
+EXPECT_PROJECT="$work/wt" expect ok base env DEVBOX_PROFILES_DIR="$root/profiles"
+
+# A missing hooks directory would make Docker create a host directory at that
+# path rather than mounting anything — the false pass that shipped before 0003.
+git init -q "$work/nohooks"
+find "$work/nohooks/.git/hooks" -mindepth 1 -delete
+rmdir "$work/nohooks/.git/hooks"
+EXPECT_PROJECT="$work/nohooks" expect deny base env DEVBOX_PROFILES_DIR="$root/profiles"
+message 'D4: .*/hooks does not exist' 'no-hooks'
 
 printf '\n%s ok, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

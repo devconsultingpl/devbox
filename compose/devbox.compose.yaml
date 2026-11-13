@@ -36,19 +36,29 @@ services:
       args:
         HARNESS: none
 
-    # The only host paths in the container: the project read-write, and its git
-    # hooks directory read-only (I1, D4 — .git/hooks is the one file class that
-    # escapes into automatic host execution).
+    # The host paths in the container are the worktree and its gitdir, mounted at
+    # their own absolute paths so git's metadata — the worktree's `.git` file and
+    # its backlink, both absolute — resolves unchanged on both sides (0003 D1,
+    # ADR 0001 amendment). The hooks directory is mounted read-only: the one file class that
+    # escapes into automatic host execution (D4). Nothing else from the host.
     volumes:
       - type: bind
-        source: ${DEVBOX_PROJECT:?set by bin/devbox}
-        target: /workspace
+        source: ${DEVBOX_WORKTREE:?set by bin/devbox}
+        target: ${DEVBOX_WORKTREE:?set by bin/devbox}
       - type: bind
-        source: ${DEVBOX_PROJECT}/.git/hooks
-        target: /workspace/.git/hooks
+        source: ${DEVBOX_GITDIR:?set by bin/devbox}
+        target: ${DEVBOX_GITDIR:?set by bin/devbox}
+        read_only: ${DEVBOX_GITDIR_RO:-false}
+      - type: bind
+        source: ${DEVBOX_GITDIR:?set by bin/devbox}/hooks
+        target: ${DEVBOX_GITDIR:?set by bin/devbox}/hooks
         read_only: true
 
-    working_dir: /workspace
+    # No /workspace: the working directory is the tree's own host path. Review-only
+    # boxes read a read-only gitdir, so git must not try to refresh the index (D2).
+    working_dir: ${DEVBOX_WORKTREE:?set by bin/devbox}
+    environment:
+      GIT_OPTIONAL_LOCKS: "0"
     init: true
     # The container is a place to work in, not a process: keep it alive so
     # `devbox shell` can exec into it.

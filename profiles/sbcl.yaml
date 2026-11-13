@@ -4,8 +4,9 @@
 # (slr's source tree; private repo, so a context, never a clone — A3):
 #   git -C <slr checkout> archive HEAD | tar -x -C "$SLR_SRC"
 #
-# `.slr/` is a container-private volume named `devbox-<project>-slr` (D10); `down`
-# removes it via that volume's compose labels, from any state (A8, A15).
+# `.slr/` is a container-private volume named `devbox-<worktree>-slr` (D10); `down`
+# removes it via that volume's compose labels, from any state (A8, A15). It lives
+# inside the worktree, which is mounted at its own host path (0003 D1).
 services:
   devbox-base:
     build:
@@ -20,7 +21,7 @@ services:
         base: service:devbox-base
         slr: ${SLR_SRC:?set by bin/devbox}
     volumes:
-      - devbox-slr:/workspace/.slr
+      - devbox-slr:${DEVBOX_WORKTREE:?set by bin/devbox}/.slr
 
 volumes:
   devbox-slr:

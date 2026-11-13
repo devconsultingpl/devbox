@@ -62,3 +62,31 @@ Named residuals, not hidden ones:
 Neither accepted cost is mitigated by tightening the container. Revisit this ADR
 when the egress layer lands, or if either residual is assumed solved by the sandbox
 alone.
+
+## Amendment (2026-11-12) — I1 restated: the worktree and its gitdir
+
+**Context.** Worktree support was scoped in plan `0001`'s A9.2 as a location
+decision (`<project>/.devbox/…`) and never as a mount mechanism. Measurement
+(plan `0003`, facts F1–F5) shows a worktree cannot be mounted alone: its `.git`
+is a file naming an absolute gitdir outside the worktree, the gitdir's backlink
+points back absolutely, and git rejects a tree whose gitdir is unreachable.
+Relative worktrees would avoid the second mount but are unreadable to the image's
+git (`unknown repository extension found: relativeworktrees`) and place the
+gitdir inside the single writable mount, which ends review-only enforcement.
+
+**Decision.** The only host paths mounted into a container are: the worktree
+(read-write), its gitdir (read-write, or read-only under the review-only
+policy), and the gitdir's `hooks` directory (read-only always). Each is mounted
+at its own absolute host path, so git metadata needs no rewriting and host and
+box resolve identical names; the working directory is the worktree root and
+`/workspace` no longer exists. I2, I3 and I4 are unchanged: no Docker socket, no
+added capabilities or host namespaces, no host credential or config directory.
+
+**Consequences.** A box can read the gitdir's `config` and the metadata of
+*sibling* worktrees on the same project — a wider boundary than one folder, but
+still the project family, and nothing outside it. Two boxes on one project share
+one gitdir; git's own locking arbitrates (per-worktree `index.lock`, shared refs
+and objects). A repository carrying a git extension the image's git cannot read is
+unusable, so `doctor` and `up` refuse it loudly rather than half-starting. The
+hooks-path residual above is unchanged: `.git/config` stays writable, and `doctor`
+checks that the hooks *mount* is read-only, not that `core.hooksPath` points at it.
