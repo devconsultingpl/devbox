@@ -39,6 +39,7 @@ remembered.
 
 ```console
 $ devbox up sbcl ~/source/priv/myapp      # build if needed, start detached
+$ devbox up --rebuild sbcl ~/source/priv/myapp   # force the build after editing this repo
 $ devbox shell sbcl ~/source/priv/myapp   # shell into the box
 $ devbox doctor sbcl ~/source/priv/myapp  # validate the effective config
 $ devbox down sbcl ~/source/priv/myapp    # stop, remove, drop slr's volume
@@ -57,6 +58,50 @@ merged onto `compose/devbox.compose.yaml`; its toolchain layer comes from
 `images/<name>/Dockerfile`, and its harness is chosen with `ARG HARNESS` at the base
 layer. A project with no repository gets one initialised; a path *inside* another
 repository is refused rather than nested.
+
+## The agent payload
+
+A profile whose harness is an agent (`sbcl`, `go-postgres`) builds that agent from
+**your checkouts**, never from whatever npm published: `PIEXT_REPO` (default
+`~/source/priv/pi-extensions`) and `SKILLSET_REPO` (default
+`~/source/priv/skillset`). `up` copies each into a build context under
+`$XDG_STATE_HOME/devbox/contexts/<name>.<digest>/` (the state directory defaults to
+`~/.local/state`) by git's own include rule —
+`git ls-files --cached --others --exclude-standard`, working-tree content — so
+unreleased and uncommitted work ships while `node_modules`, `.env` and anything
+else git ignores never enters the image. A credential-shaped filename (`.env*`,
+`*.pem`, `*.key`, `*.p12`, `id_rsa*`, …) refuses the build outright, and a file
+whose content looks like a secret is reported by filename only.
+
+The result is identified by a **stamp**: per source, its commit plus a digest of
+the materialised file set, plus the two build inputs the sources do not describe
+— the harness and the browser mode — so `DEVBOX_BROWSER=full` rebuilds instead of
+reusing a headless image. `up` builds when the image's stamp
+(`devbox.agent.stamp`) differs from the current one and reuses the image
+otherwise, so a dirty edit, a new untracked file and a deletion each rebuild,
+while an ignored file never does. `devbox doctor` prints the stamp it would
+build, and the image keeps a `/opt/devbox/agent/SOURCES` record beside the label.
+This repo's own
+Dockerfiles and harness scripts are outside the stamp: edit one and use
+`devbox up --rebuild`.
+
+Inside the box the payload lands under `/opt/devbox/agent/`: eleven `@joozik/*`
+workspace packages as local paths — flow, flow-workflow and flow's six sibling
+extensions, plus pi-subagents, pi-playwright and pi-permission-system (pi loads
+their TypeScript sources; nothing is fetched from a registry) — skillset's skills,
+agents and prompts installed by `skillset sync`, and Playwright's headless
+chromium shell pinned at `/opt/devbox/browser/headless_shell` and exported as
+`PI_PLAYWRIGHT_EXECUTABLE` in the container's environment. Permissions are explicit
+allow-all (`/root/.pi/agent/extensions/pi-permission-system/config.json`) and the
+thirteen `browser_*` tools are active from the first turn: an unattended session
+cannot answer a prompt, so the container boundary — not a dialog — is what
+isolates it.
+
+**Adding a tool** is a source change: a package goes into `settings.json` and a
+setting beside it, both in `harnesses/pi.sh`, and the next `up` carries it.
+**Adding a harness** (another agent) is one new `harnesses/<name>.sh` consuming
+the same `/opt/devbox/payload`, selected by `HARNESS` in the profile;
+`harnesses/none.sh` stays bare, so `base` carries no agent at all.
 
 ## `devbox doctor`
 
@@ -116,8 +161,10 @@ Docker on colima, plus the `compose` and `buildx` CLI plugins — devbox points
 `DOCKER_CONFIG` at a devbox-managed directory linking the Homebrew plugins, because
 the Apple-Silicon CLI does not search that path — `jq` for `doctor`, `git` (≥ 2.31)
 at the project (a repository is initialised when missing), and the worktree's
-repository on the same filesystem. The `sbcl` profile also needs slr's source tree
-as a build context, since that repo is private and this one is public:
+repository on the same filesystem, and the two agent sources (see
+[The agent payload](#the-agent-payload)) — `PIEXT_REPO` and `SKILLSET_REPO`
+override their locations. The `sbcl` profile also needs slr's source tree as a
+build context, since that repo is private and this one is public:
 
 ```console
 $ git -C <slr checkout> archive HEAD | tar -x -C ~/.cache/devbox/slr-src
@@ -132,7 +179,10 @@ $ git -C <slr checkout> archive HEAD | tar -x -C ~/.cache/devbox/slr-src
 | `profiles/*.yaml` | per-profile overrides: toolchain, harness, services |
 | `images/*/Dockerfile` | toolchain layers (`base` → `sbcl`, `go`, …) |
 | `harnesses/*.sh` | the harness seam: exactly one applied per image |
+| `harnesses/lib/agent-payload.sh` | materialising, guarding and stamping the agent's sources |
+| `images/payload-empty/` | the empty context a `none` build receives instead of them |
 | `tests/doctor.test.sh` | invariant tests, one per I1–I4 |
 | `tests/worktree.test.sh` | the worktree boundary end to end |
+| `tests/agent-image.test.sh` | the agent layer inside a real box |
 | `docs/plans/completed/0001-*` | the specification this repo is built to |
 | `docs/decisions/` | the durable *why* behind the posture |

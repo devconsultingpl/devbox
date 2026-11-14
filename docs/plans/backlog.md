@@ -59,3 +59,22 @@ pi's `docs/containerization.md` for the routing-extension pattern.
 - **Outbound push notification (ntfy/email/Slack).** Optional add-on to `0002`'s
   host-side watcher. Kept out of the default path so a purely local operation
   does not acquire a third-party dependency in its critical path.
+
+## slr as our codemode (research, deferred)
+
+**What.** pi's `codemode` is a QuickJS sandbox where the model writes JavaScript
+that calls `tools.<name>(...)` and non-LLM models, and only the script's output
+reaches the model (`pi-coding-agent/docs/codemode.md`). Our counterpart is
+`smart-lisp-repl` (present in the checkout as `packages/pi-slr-service`, not yet
+registered in the box), which is a
+Lisp evaluation service rather than a scripted orchestration surface.
+
+**Assessment.** Not equivalent today: slr gives the agent a REPL to evaluate in,
+but no `tools.*` / `models` bridge and no sandbox contract that says what reaches
+the model. The equivalence would be a pi extension exposing tools and non-LLM
+models as Lisp forms inside the REPL, plus a result-shaping rule.
+
+**Promotion condition.** Promote to a plan when a task actually needs scripted tool
+orchestration with large intermediate results filtered outside the model context,
+or when `pi-slr-service` grows a tool bridge. Until then the workstation image
+(`0004`) ships slr as a tool, not as codemode.

@@ -4,6 +4,7 @@
 #   devbox up     <profile> <path>   build and start the box for that worktree
 #   devbox shell  <profile> <path>   shell into the running box
 #   devbox down   <profile> <path>   stop and remove it; --purge also drops data
+#         --rebuild                   force the image build (after editing this repo)
 #   devbox doctor <profile> <path>   validate the effective config (I1–I4)
 #   devbox policy <commits-allowed|review-only> <path>
 #   devbox policy --list
@@ -23,6 +24,12 @@ profiles_dir=${DEVBOX_PROFILES_DIR:-$repo/profiles}
 compose_file=${DEVBOX_COMPOSE_FILE:-$repo/compose/devbox.compose.yaml}
 slr_src=${SLR_SRC:-$HOME/.cache/devbox/slr-src}
 state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/devbox
+# 0004 D2 — the agent's sources are these two checkouts, materialised per `up`.
+pi_ext_repo=${PIEXT_REPO:-$HOME/source/priv/pi-extensions}
+skillset_repo=${SKILLSET_REPO:-$HOME/source/priv/skillset}
+contexts_dir=$state_dir/contexts
+
+. "$repo/harnesses/lib/agent-payload.sh"
 
 die() { echo "devbox: $*" >&2; exit 1; }
 
@@ -32,7 +39,7 @@ die() { echo "devbox: $*" >&2; exit 1; }
 dgit() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR GIT_OPTIONAL_LOCKS=0 git "$@"; }
 
 usage() {
-  sed -n '4,9p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '4,10p' "$0" | sed 's/^# \{0,1\}//'
   echo ""
   echo "profiles: $(cd "$profiles_dir" && ls ./*.yaml 2>/dev/null | sed 's|\./||;s|\.yaml||' | tr '\n' ' ')"
   exit "${1:-1}"
@@ -118,9 +125,11 @@ fi
 export DOCKER_HOST="$docker_host" DOCKER_CONFIG="$docker_config"
 
 purge=0
+rebuild=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --purge) purge=1; shift ;;
+    --rebuild) rebuild=1; shift ;;
     --*) die "unknown option: $1" ;;
     *) break ;;
   esac
@@ -202,10 +211,93 @@ slug=$(basename "$worktree" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | 
 uniq=$(printf '%s' "$worktree" | shasum -a 256 | cut -c1-8)
 project_name="devbox-$slug-$uniq"
 
+# 0004 D1 — the harness decides whether the box carries an agent at all: only an
+# agent harness has sources to materialise and a stamp to compare.
+profile_harness() {
+  harness=$(sed -n 's/^[[:space:]]*HARNESS:[[:space:]]*[\"'\'']\{0,1\}\([a-z][a-z0-9-]*\).*/\1/p' "$profile_file" | tail -1)
+  # A profile may also write it as a flow map, the shape every profile already
+  # uses for additional_contexts; the `[{,]` anchor keeps comments out of it.
+  [ -n "$harness" ] || harness=$(sed -n 's/.*[{,][[:space:]]*HARNESS:[[:space:]]*[\"'\'']\{0,1\}\([a-z][a-z0-9-]*\).*/\1/p' "$profile_file" | tail -1)
+  echo "${harness:-none}"
+}
+
+# The harness name selects a script; without that check a typo is accepted here,
+# materialises 15 MB, stamps an image and only then fails at the Dockerfile COPY.
+require_harness_script() {
+  [ "$1" = none ] && return 0
+  [ -f "$repo/harnesses/$1.sh" ] ||
+    die "no harness script for '$1' — expected $repo/harnesses/$1.sh"
+}
+
+# 0004 D2/D3 — materialise both sources into build contexts and stamp the result.
+# The stamp is the commit plus a digest of the materialised set per source, plus
+# the build inputs the sources do not describe — the harness and the browser mode
+# — so a changed build input is never silently reused. A dirty, added or deleted
+# file moves the stamp; an ignored file never does; the same content twice yields
+# the same stamp.
+#
+# Each context is named by its own digest: nothing is overwritten in place, so a
+# concurrent `up` on another worktree can never rewrite the directory a running
+# build is reading, and no lock is needed. `prepare_agent_payload <root>` takes a
+# payload_scratch root — doctor uses one, because validating a config must not write the
+# machine's real store.
+prepare_agent_payload() {
+  payload_root=${1:-$contexts_dir}
+  mkdir -p "$payload_root"
+  sources=$payload_root/SOURCES
+  : > "$sources.tmp.$$"
+  for spec in "pi-extensions PIEXT_REPO $pi_ext_repo" "skillset SKILLSET_REPO $skillset_repo"; do
+    name=${spec%% *}
+    env_var=$(printf '%s' "${spec#* }" | cut -d' ' -f1)
+    src=${spec##* }
+    if [ ! -d "$src" ]; then
+      echo "devbox: agent source $name not found at $src — clone it, or point $env_var at it" >&2
+      return 1
+    fi
+    payload_scratch=$payload_root/.tmp.$name.$$
+    payload_materialize "$src" "$payload_scratch" || {
+      echo "devbox: could not materialise $name from $src" >&2
+      return 1
+    }
+    payload_guard "$payload_scratch" || {
+      find "$payload_scratch" -depth -delete
+      echo "devbox: refusing the agent payload from $src — see above" >&2
+      return 1
+    }
+    digest=$(payload_digest "$payload_scratch")
+    context=$payload_root/$name.$(printf '%s' "$digest" | cut -c1-12)
+    if [ -d "$context" ]; then find "$payload_scratch" -depth -delete; else mv "$payload_scratch" "$context"; fi
+    case "$name" in
+      pi-extensions) pi_ext_context=$context ;;
+      skillset) skillset_context=$context ;;
+    esac
+    printf '%s %s %s\n' "$name" \
+      "$(dgit -C "$src" rev-parse HEAD)" "$digest" >> "$sources.tmp.$$"
+  done
+  # A context is reached only through the digest-named path this run resolved, so
+  # the pre-digest layout's fixed names are dead weight left on the machine.
+  for legacy in "$payload_root/pi-extensions" "$payload_root/skillset"; do
+    [ -d "$legacy" ] && find "$legacy" -depth -delete
+  done
+  mv "$sources.tmp.$$" "$sources"
+  agent_sources=$(cat "$sources")
+  agent_stamp=$(printf '%s\nharness=%s\nbrowser=%s\n' \
+    "$agent_sources" "$(profile_harness)" "$browser_mode" | shasum -a 256 | cut -c1-16)
+  pi_ext_source=$(sed -n 's/^pi-extensions //p' "$sources")
+  skillset_source=$(sed -n 's/^skillset //p' "$sources")
+  # Where the contexts are, as this script alone resolved them: an ambient
+  # DEVBOX_PIEXT_SRC in the operator's environment must not reach a build (D2).
+  piext_src=$pi_ext_context
+  skillset_src=$skillset_context
+}
+
 compose() {
   DEVBOX_REPO="$repo" DEVBOX_PROFILE="$profile" DEVBOX_WORKTREE="$worktree" \
   DEVBOX_GITDIR="$gitdir" DEVBOX_GITDIR_RO="$gitdir_ro" \
   DEVBOX_PROJECT_NAME="$project_name" SLR_SRC="$slr_src" \
+  DEVBOX_AGENT_STAMP="$agent_stamp" DEVBOX_PIEXT_SOURCE="$pi_ext_source" \
+  DEVBOX_SKILLSET_SOURCE="$skillset_source" DEVBOX_BROWSER_MODE="$browser_mode" \
+  DEVBOX_PIEXT_SRC="$piext_src" DEVBOX_SKILLSET_SRC="$skillset_src" \
   docker compose --profile build -f "$compose_file" -f "$profile_file" "$@"
 }
 
@@ -216,6 +308,19 @@ doctor() {
   refuse_unknown_extensions
   [ -d "$gitdir/hooks" ] ||
     die "D4: $gitdir/hooks does not exist — its read-only mount would create a host directory; run: devbox up $profile $worktree"
+  # 0004 D3 — the stamp `up` would build is computed before the config is read and
+  # into a throwaway root, so the checked config carries the contexts a build
+  # would carry, and validation writes nothing to the machine's store. A missing
+  # source is not an I1–I4 violation — it breaks the build (D2) — so it is
+  # reported below and does not decide this check.
+  harness=$(profile_harness)
+  doctor_root=""
+  payload_ready=1
+  if [ "$harness" != none ]; then
+    require_harness_script "$harness"
+    doctor_root=$(mktemp -d "${TMPDIR:-/tmp}/devbox-doctor.XXXXXX")
+    prepare_agent_payload "$doctor_root" 2>/dev/null || payload_ready=0
+  fi
   config=$(compose config --format json) || die "docker compose could not resolve $profile"
   violations=$(printf '%s' "$config" | jq -r --arg worktree "$worktree" --arg gitdir "$gitdir" '
     .services as $services
@@ -251,7 +356,16 @@ doctor() {
     printf '%s\n' "$violations" | sed 's/^/devbox doctor: /' >&2
     die "doctor failed — $profile violates I1–I4"
   fi
-  echo "devbox doctor: ok — profile $profile, worktree $worktree, gitdir $gitdir"
+  echo "devbox doctor: ok — profile $profile, harness $harness, worktree $worktree, gitdir $gitdir"
+  if [ "$harness" != none ]; then
+    if [ "$payload_ready" = 1 ]; then
+      printf '%s\n' "$agent_sources" | sed 's/^/devbox doctor: source /'
+      echo "devbox doctor: agent stamp $agent_stamp"
+    else
+      echo "devbox doctor: agent sources unavailable — up would refuse ($pi_ext_repo, $skillset_repo)"
+    fi
+    find "$doctor_root" -depth -delete
+  fi
 }
 
 # Canonical config may not come from the mounted workspace (I6, criterion 9).
@@ -260,6 +374,18 @@ for f in "$profile_file" "$compose_file"; do
 done
 
 gitdir_ro=false
+# `none` is a real label: an image built by hand (Dockerfile default `unstamped`)
+# never equals it, and a `none` box keeps being reused.
+agent_stamp=none
+pi_ext_source=""
+skillset_source=""
+piext_src=""
+skillset_src=""
+case "${DEVBOX_BROWSER:-headless}" in
+  headless|"") browser_mode=headless ;;
+  full) browser_mode=full ;;
+  *) die "DEVBOX_BROWSER must be headless or full, not: ${DEVBOX_BROWSER}" ;;
+esac
 case "$verb" in
   up|shell|doctor) policy=$(policy_read "$worktree") ;;
   down) policy=commits-allowed ;;
@@ -271,7 +397,22 @@ case "$verb" in
   up)
     refuse_unknown_extensions
     prepare_gitdir
-    compose up -d --build devbox
+    # Report, not exit: doctor calls this too, and a missing checkout is not an
+    # I1–I4 violation — it only makes the build impossible (0004 D2).
+    harness=$(profile_harness)
+    require_harness_script "$harness"
+    if [ "$harness" != none ]; then
+      prepare_agent_payload || die "agent payload unavailable — up refused"
+    fi
+    image="devbox/dev-$profile:local"
+    current=$(docker image inspect "$image" --format '{{ index .Config.Labels "devbox.agent.stamp" }}' 2>/dev/null || true)
+    if [ "$rebuild" = 1 ] || ! docker image inspect "$image" >/dev/null 2>&1 || [ "$current" != "$agent_stamp" ]; then
+      echo "devbox: building — agent stamp ${agent_stamp:-none}"
+      compose up -d --build devbox
+    else
+      compose up -d devbox
+      echo "devbox: image reused — agent stamp ${agent_stamp:-none}"
+    fi
     if [ "$gitdir_ro" = true ]; then
       echo "devbox: review-only — git commit is blocked inside; the host commits (D2)"
     fi

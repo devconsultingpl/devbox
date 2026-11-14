@@ -99,7 +99,8 @@ with no network, no account, and no third-party service.
 ## Budget
 
 **New dependencies:** `tmux` (installed in the image), and the already-public
-`@joozik/flow`, `@joozik/flow-workflow`, `@gotgenes/pi-subagents` npm packages.
+`@joozik/flow`, `@joozik/flow-workflow`, `@joozik/pi-subagents` npm packages (the
+local package name; `@gotgenes/pi-subagents` was a stale reference).
 No host-side dependency beyond a shell and `osascript`.
 
 | File | Est. physical lines |
@@ -213,6 +214,59 @@ tune `max`/`onCap` so the failure arrives in minutes, not hours.
 | Do the FLOW skills' declared contracts compose cleanly with the stages? | The contract adjudicator runs at load time; a `canCompose` failure is the signal. |
 | How long does a realistic run take, and are the caps right? | Time the success and exhaustion paths on a scratch project; adjust `max` and `maxIterations`. |
 | Does `osascript` notification work while the terminal is not focused? | Fire manually from the watcher; check Notification Center settings. |
+
+## Amendment (2026-11-12) — the supervisor shape the developer described
+
+Recorded, not yet designed. It changes the graph this plan assumed, so **step 2
+("author the graph") does not start until the first question below is answered.**
+
+The loop, as specified:
+
+1. A supervisor runs inside the box and **decomposes the plan into tasks** by
+   invoking a dedicated agent with its own instructions, prompt and skills.
+2. Per task: a **builder** subagent implements it; a **reviewer** subagent judges
+   whether the change is done well and fulfils that task completely; the builder
+   applies the corrections; the next task follows. Only when the whole plan is
+   done does the run leave the task loop.
+3. Then **one more demanding review** at run scope — security, correctness,
+   alignment with the plan, and a simplification pass: if the same behaviour is
+   achievable with less code, and in a safer or more reliable way, prefer it
+   (a lens, not a fetish for deletion).
+4. That final review plus its corrections may run **at most twice**; then the run
+   terminates with `READY-FOR-REVIEW.md` or `BLOCKED.md` as already specified.
+
+What this supersedes, subject to the design pass:
+
+- **D2** assumed the graph composes the FLOW stage skills verbatim; the described
+  loop is task-level with a paired builder and reviewer, which is a different
+  contract from a single implement stage.
+- **D3** made `assess`/`panel` the verification engine over a criteria artifact.
+  That may remain the reviewer's engine, but the *unit* becomes a task, and a task
+  needs its own done-predicate and its own cap. The first design question is
+  therefore: **is the per-task reviewer an `assess` round, or a separate stage
+  with a task-scoped verdict?**
+- The completion contract, escalation artifacts and the tmux driving mode (D1) are
+  unaffected; `0004` (proposed, implemented, not yet signed off) would supply the
+pi + flow + skillset payload they assume.
+
+New constraints this amendment adds, to be designed rather than assumed:
+
+- Tasks must be **persisted on the bind mount** (one file per task, with state), so
+  the host can see progress and a resumed run can tell what was finished.
+- Every loop needs a **per-task cap** as well as the run-wide one, or one
+  unachievable task consumes the whole run.
+- The final two-round cap must be **recorded in the artifact**, including which
+  round produced the accepted state.
+- The builder/reviewer pairing is where **subagent sessions multiply**; the
+  sessions directory and the caps have to be counted per task, not per run, or the
+  audit trail stops describing what happened.
+
+Open questions this amendment creates (each needs a measurement before it is
+designed in): does `pi-subagents` expose a per-child verdict cleanly enough to be a
+task's done-predicate; does the skillset payload's builder/reviewer skills already
+define that contract; how does a task file survive a container restart; and what
+does a task-level `BLOCKED.md` look like when tasks 1–3 succeeded and task 4 did
+not.
 
 ## Confidence
 

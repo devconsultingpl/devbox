@@ -49,7 +49,19 @@ WORKDIR /root
 CMD ["/bin/zsh", "-l"]
 
 # The harness seam (D3). HARNESS has no default on purpose: an image with no
-# harness chosen is a build error, not a silent no-op.
+# harness chosen is a build error, not a silent no-op. The payload contexts are
+# materialised by bin/devbox from the agent's own checkouts and stamped here, so
+# the image names no version (0004 D2/D3); a harness that needs none of it —
+# `none` — is handed the empty sentinel context instead. The stamp default is a
+# word, not empty: "built by hand, never stamped" must not equal a `none` box's
+# label, or a stale image would be reused as if it were current.
 ARG HARNESS
+ARG AGENT_STAMP=unstamped
+ARG PIEXT_SOURCE=
+ARG SKILLSET_SOURCE=
+ARG BROWSER=headless
+LABEL devbox.agent.stamp=$AGENT_STAMP
+COPY --from=piextensions / /opt/devbox/payload/pi-extensions
+COPY --from=skillset / /opt/devbox/payload/skillset
 COPY harnesses/${HARNESS}.sh /opt/devbox/harness.sh
 RUN sh /opt/devbox/harness.sh

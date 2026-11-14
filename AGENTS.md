@@ -5,8 +5,10 @@ directory, from a canonical config the agent cannot write. Enabling condition fo
 separate orchestrator; not the product.
 
 **Spec:** `docs/plans/completed/0001-devbox-runtime.md` (delivered, signed off 2026-09-26;
-its Review log holds three rounds) — binding, and what review checks against. Context only,
-do not start: `docs/plans/0002-devbox-orchestrator.md`, `docs/plans/backlog.md`.
+its Review log holds three rounds) and `docs/plans/completed/0004-agent-workstation.md`
+(delivered, signed off 2026-11-14; the agent payload, its stamp and the rebuild
+rule) — binding, and what review checks against. Context only, do not start:
+`docs/plans/0002-devbox-orchestrator.md`, `docs/plans/backlog.md`.
 
 ## Why it exists
 
@@ -73,6 +75,28 @@ redirection at a shared host path; if one could have been written, verify it was
 - A worktree's `.git` is a file naming an absolute gitdir, and `<gitdir>/gitdir` points
   back absolutely; mounting only the worktree gives `fatal: not a git repository`. The
   box therefore mounts the worktree and the repository's gitdir at those same host paths.
+- The agent payload is built from two host checkouts (`PIEXT_REPO`, `SKILLSET_REPO`),
+  materialised by `up` — into `~/.local/state/devbox/contexts/<name>.<digest>`, one
+  directory per content digest so a concurrent run cannot rewrite what a build is
+  reading — and by `doctor`, which materialises into a throwaway root instead,
+  by
+  `git ls-files --cached --others --exclude-standard`, and identified by a stamp —
+  per source, commit plus a digest of that file set — written to
+  the image label `devbox.agent.stamp` (and a `/opt/devbox/agent/SOURCES` record the
+  CLI does not read back). The stamp also covers the harness name and the browser
+  mode, so `DEVBOX_BROWSER=full` rebuilds. `up` rebuilds exactly when it moves;
+  this repo's own images and harnesses are outside it, so `--rebuild` after editing
+  them.
+- pi-extensions installs with `npm install`, never `npm ci`: an untracked workspace
+  member added to the tree (ordinary dirty work, which D2 exists to ship) makes
+  `npm ci` refuse it. skillset is a single package and still uses `npm ci`.
+- The lean agent image is 2.03 GB and a cold build 1 m 48 s (measured 2026-11-14,
+  base+sbcl, `--no-cache`). The browser is Playwright's `chromium-headless-shell`
+  only, pinned at `/opt/devbox/browser/headless_shell` and exported to the container
+  as `PI_PLAYWRIGHT_EXECUTABLE`; `DEVBOX_BROWSER=full` adds full chromium for headed
+  work and is part of the stamp, so it rebuilds. `skillset sync` has no target filter, so the box
+  also gets its claude-code and opencode artifacts under `/root` — noise inside the
+  image, never a host write.
 - Container git is 2.43 while the host may be 2.56: a repo carrying
   `extensions.relativeworktrees` (written by `git worktree add --relative-paths`) is
   unreadable in-box, so `up` and `doctor` refuse such a repository up front. `up` also
