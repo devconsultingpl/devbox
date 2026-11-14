@@ -52,12 +52,54 @@ $ devbox policy --list
 `<path>` is a repository root or a git worktree root. There is no `/workspace`:
 the working directory is the tree's own host path.
 
-Profiles live in `profiles/`: `base` (bare container), `sbcl` (SBCL + slr, harness
-`pi`), `go-postgres` (Go plus a postgres service). A profile is a compose override
-merged onto `compose/devbox.compose.yaml`; its toolchain layer comes from
-`images/<name>/Dockerfile`, and its harness is chosen with `ARG HARNESS` at the base
-layer. A project with no repository gets one initialised; a path *inside* another
+Profiles live in `profiles/`:
+
+| Profile | Toolchain | Agent |
+|---|---|---|
+| `base` | bare Ubuntu shell (git, zsh, rg, tmux, curl, wget, …) | none |
+| `sbcl` | SBCL + slr | pi, the `@joozik/*` packages, skillset, browser |
+| `go-postgres` | Go + a postgres 17 service | the same agent |
+
+The toolchain layer is `images/<name>/Dockerfile`, built `FROM base`; the **agent
+arrives with the harness**, not with the toolchain, which is why `base` is a bare
+shell and the other two carry the full payload. A profile is a compose override
+merged onto `compose/devbox.compose.yaml`, and its harness is chosen with
+`ARG HARNESS` at the base layer.
+
+**Adding a toolchain** (python, rust, another database) is two files: `images/<name>/Dockerfile`
+with `FROM base`, and `profiles/<name>.yaml` with `HARNESS: pi` when the box should
+also carry the agent. There is no toolchain-free agent profile yet: to work with
+only the agent, use `sbcl` or add a profile whose Dockerfile is just `FROM base`.
+
+A project with no repository gets one initialised; a path *inside* another
 repository is refused rather than nested.
+
+## Working in a box
+
+`devbox shell <profile> <path>` drops you into the box. `pi` is on `PATH` there
+with the skills, agents and browser tools already installed, and the box carries no
+credential (I5) — authenticate once per box, in the session (`/login`) or by giving
+pi its own environment, never by baking a key into the image:
+
+```console
+$ devbox up sbcl ~/source/priv/myapp      # shell needs a running box
+$ devbox shell sbcl ~/source/priv/myapp
+box$ pi                      # then /login, or: API key in pi's env for this run only
+```
+
+Nothing else is needed to *use* the box interactively: plan, implement, test and
+review there exactly as on the host, answering the agent's questions in the TUI.
+Everything a session writes — a plan, code, a commit — lands on the mounted worktree
+at its own host path, so the host sees it immediately and `devbox down` cannot take
+it with it. `devbox policy review-only <path>` is the "propose, do not commit"
+variant.
+
+Two things to know before you rely on it. A session sees the payload **as built**:
+edits to your `pi-extensions`/`skillset` checkouts reach the box at the next `up`
+(which rebuilds itself when their content changed), never mid-session. And the box
+is deliberately smaller than a workstation — no Docker socket (I2), and no Python,
+`jq`, `make` or C compiler unless a profile adds them — which is why *this* repo's
+test suite runs on the host rather than inside a box.
 
 ## The agent payload
 
@@ -70,8 +112,10 @@ A profile whose harness is an agent (`sbcl`, `go-postgres`) builds that agent fr
 `git ls-files --cached --others --exclude-standard`, working-tree content — so
 unreleased and uncommitted work ships while `node_modules`, `.env` and anything
 else git ignores never enters the image. A credential-shaped filename (`.env*`,
-`*.pem`, `*.key`, `*.p12`, `id_rsa*`, …) refuses the build outright, and a file
-whose content looks like a secret is reported by filename only.
+`*.npmrc`, `*.pem`, `*.key`, `*.p12`, `id_rsa*`, …) refuses the build outright, and
+so does a file whose *content* looks like a secret (an AWS key, a private-key
+block, a GitHub token) — reported by filename, never by value, because the image
+layer is shared by every box built from the profile.
 
 The result is identified by a **stamp**: per source, its commit plus a digest of
 the materialised file set, plus the two build inputs the sources do not describe
@@ -91,7 +135,9 @@ extensions, plus pi-subagents, pi-playwright and pi-permission-system (pi loads
 their TypeScript sources; nothing is fetched from a registry) — skillset's skills,
 agents and prompts installed by `skillset sync`, and Playwright's headless
 chromium shell pinned at `/opt/devbox/browser/headless_shell` and exported as
-`PI_PLAYWRIGHT_EXECUTABLE` in the container's environment. Permissions are explicit
+`PI_PLAYWRIGHT_EXECUTABLE` in the container's environment. `DEVBOX_BROWSER=full`
+adds full chromium for headed work (+~0.6 GB); it is part of the stamp, so
+switching rebuilds. Permissions are explicit
 allow-all (`/root/.pi/agent/extensions/pi-permission-system/config.json`) and the
 thirteen `browser_*` tools are active from the first turn: an unattended session
 cannot answer a prompt, so the container boundary — not a dialog — is what
@@ -155,15 +201,20 @@ allowlist exists (the Gondolin entry in `docs/plans/backlog.md`). A project that
 genuinely needs cloud access needs a scoped identity plus that egress layer, not a
 smarter prompt.
 
+**Unattended runs.** There is no supervisor yet: a box is interactive. Planning a
+change, building it, verifying it and reviewing it inside a box all work today, with
+you answering the agent's questions; plan-in, result-out without you is plan
+`0002`, not a shipped capability.
+
 ## Host prerequisites
 
 Docker on colima, plus the `compose` and `buildx` CLI plugins — devbox points
 `DOCKER_CONFIG` at a devbox-managed directory linking the Homebrew plugins, because
 the Apple-Silicon CLI does not search that path — `jq` for `doctor`, `git` (≥ 2.31)
-at the project (a repository is initialised when missing), and the worktree's
-repository on the same filesystem, and the two agent sources (see
-[The agent payload](#the-agent-payload)) — `PIEXT_REPO` and `SKILLSET_REPO`
-override their locations. The `sbcl` profile also needs slr's source tree as a
+at the project (a repository is initialised when missing), the worktree's repository
+on the same filesystem, and the two agent sources (see
+[The agent payload](#the-agent-payload); `PIEXT_REPO` and `SKILLSET_REPO` override
+their locations). The `sbcl` profile also needs slr's source tree as a
 build context, since that repo is private and this one is public:
 
 ```console
@@ -184,5 +235,6 @@ $ git -C <slr checkout> archive HEAD | tar -x -C ~/.cache/devbox/slr-src
 | `tests/doctor.test.sh` | invariant tests, one per I1–I4 |
 | `tests/worktree.test.sh` | the worktree boundary end to end |
 | `tests/agent-image.test.sh` | the agent layer inside a real box |
-| `docs/plans/completed/0001-*` | the specification this repo is built to |
-| `docs/decisions/` | the durable *why* behind the posture |
+| `docs/plans/completed/` | the delivered specifications: `0001` runtime, `0003` worktrees, `0004` agent workstation |
+| `docs/plans/0002-*`, `backlog.md` | not delivered: the supervisor `0002`, and the backlog behind it |
+| `docs/decisions/` | the durable *why*: trust posture, payload-from-source-content |
