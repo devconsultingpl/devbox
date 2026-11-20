@@ -18,7 +18,7 @@
 set -eu
 
 node_version=22.19.0
-pi_version=1.5.2
+pi_version=1.6.0
 playwright_version=1.63.0
 
 payload=/opt/devbox/payload
