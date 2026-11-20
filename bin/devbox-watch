@@ -1,0 +1,58 @@
+#!/bin/sh
+# devbox-watch — host-side. Raises a macOS notification when a run leaves its one
+# terminal artifact, and stays silent for everything in between (plan 0002,
+# criterion 4).
+#
+#   bin/devbox-watch <path> [--interval <seconds>] [--timeout <seconds>]
+#
+# Why a file and not an event: the project directory is a bind mount, so a file
+# written inside the box is visible here immediately, with no network, no account
+# and no third-party service (D4). Polling two names is the whole mechanism.
+#
+# The two names are the graph's, not this script's: pi-extensions plan 0030 exports
+# them from `built-ins/terminal.ts` (D7), and `tests/watch.test.sh` fails if the
+# constants and these strings drift.
+set -eu
+
+ready=READY-FOR-REVIEW.md
+blocked=BLOCKED.md
+interval=2
+[ "$#" -ge 1 ] || { echo "usage: devbox-watch <path> [--interval <s>] [--timeout <s>]" >&2; exit 2; }
+target=$1
+shift
+timeout=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --interval) interval=$2; shift 2 ;;
+    --timeout) timeout=$2; shift 2 ;;
+    *) echo "devbox-watch: unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+[ -d "$target" ] || { echo "devbox-watch: no such directory: $target" >&2; exit 2; }
+
+notify() { # notify <title> <message>
+  if [ -n "${DEVBOX_NOTIFY_COMMAND:-}" ]; then
+    $DEVBOX_NOTIFY_COMMAND "$1: $2"
+    return 0
+  fi
+  osascript -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1 ||
+    printf '%s: %s\n' "$1" "$2"
+}
+
+start=$(date +%s)
+while :; do
+  for name in "$ready" "$blocked"; do
+    [ -f "$target/$name" ] || continue
+    case "$name" in
+      "$ready") notify "devbox" "ready for review — $target/$name" ;;
+      *) notify "devbox" "blocked — $target/$name" ;;
+    esac
+    printf '%s\n' "$target/$name"
+    exit 0
+  done
+  if [ -n "$timeout" ] && [ "$(( $(date +%s) - start ))" -ge "$timeout" ]; then
+    echo "devbox-watch: no terminal artifact after ${timeout}s" >&2
+    exit 1
+  fi
+  sleep "$interval"
+done

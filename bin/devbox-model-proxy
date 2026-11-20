@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+# devbox-model-proxy — the host half of the model credential (plan 0002, I5
+# amendment). The key stays in the login Keychain and in this process's memory; the
+# box holds a token this proxy accepts and the provider rejects.
+#
+#   bin/devbox-model-proxy serve     # foreground; `up` starts it detached
+#   bin/devbox-model-proxy ensure    # start if not listening (idempotent)
+#   bin/devbox-model-proxy stop
+#   bin/devbox-model-proxy status
+#   bin/devbox-model-proxy verify <box>   # criteria 14–15 evidence, prints no secret
+#
+# Bound to 127.0.0.1 only: reachable from a colima box through host.lima.internal,
+# never from the LAN. One line per request; no header or body is ever formatted.
+import hmac, http.client, json, os, signal, socket, subprocess, sys, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+UPSTREAM = {"openrouter": ("openrouter.ai", "/api/v1"), "deepseek": ("api.deepseek.com", "")}
+ITEMS = {"openrouter": "devbox-openrouter", "deepseek": "devbox-deepseek"}
+HOP_BY_HOP = {"connection", "transfer-encoding", "content-length", "keep-alive", "upgrade"}
+PORT = int(os.environ.get("DEVBOX_MODEL_PROXY_PORT") or 8999)
+STATE = os.environ.get("DEVBOX_STATE_DIR") or os.path.expanduser("~/.local/state/devbox")
+ROOT = os.path.join(STATE, "model-proxy")
+TOKENS = os.path.join(ROOT, "tokens")
+PIDFILE = os.path.join(ROOT, "proxy.pid")
+LOG = os.path.join(ROOT, "proxy.log")
+
+KEYS = {}
+
+
+def keychain(provider):
+    item = ITEMS.get(provider)
+    if not item:
+        return None
+    try:
+        out = subprocess.run(["security", "find-generic-password", "-s", item, "-a", "devbox", "-w"],
+                             capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def live_tokens():
+    found = {}
+    try:
+        names = os.listdir(TOKENS)
+    except FileNotFoundError:
+        return found
+    for name in names:
+        try:
+            with open(os.path.join(TOKENS, name), encoding="utf-8") as handle:
+                for line in handle:
+                    if line.startswith("DEVBOX_MODEL_TOKEN="):
+                        found[line.split("=", 1)[1].strip()] = name
+        except OSError:
+            continue
+    return found
+
+
+def listening():
+    with socket.socket() as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex(("127.0.0.1", PORT)) == 0
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def record(self, provider, status, size):
+        with open(LOG, "a", encoding="utf-8") as handle:
+            handle.write("%s %s %s %s %s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), provider or "-",
+                                                 self.command, self.path, status, size))
+
+    def reply(self, status, message):
+        body = json.dumps({"error": message}).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+        return len(body)
+
+    def do_GET(self):
+        self.relay("GET")
+
+    def do_POST(self):
+        self.relay("POST")
+
+    def relay(self, method):
+        if self.path == "/__devbox/health":
+            self.record("-", 200, self.reply(200, "ok"))
+            return
+        head, _, tail = self.path.lstrip("/").partition("/")
+        provider, rest = head, "/" + tail
+        if provider not in UPSTREAM:
+            self.record(provider, 404, self.reply(404, "unknown provider route"))
+            return
+        given = self.headers.get("Authorization", "")[len("Bearer "):]
+        box = next((name for token, name in live_tokens().items() if given and hmac.compare_digest(token, given)), None) if given else None
+        if box is None:
+            self.record(provider, 401, self.reply(401, "no live devbox token for this box"))
+            return
+        key = KEYS.get(provider)
+        if not key:
+            self.record(provider, 503, self.reply(503, "%s: no credential in the login Keychain" % provider))
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else None
+        headers = {"authorization": "Bearer " + key, "accept": self.headers.get("Accept", "application/json")}
+        if self.headers.get("Content-Type"):
+            headers["content-type"] = self.headers["Content-Type"]
+        host, base = UPSTREAM[provider]
+        try:
+            conn = http.client.HTTPSConnection(host, timeout=900)
+            conn.request(method, base + rest, body=body, headers=headers)
+            upstream = conn.getresponse()
+        except OSError as error:
+            self.record(provider, 502, self.reply(502, "%s: %s" % (host, error)))
+            return
+        self.send_response(upstream.status)
+        for name, value in upstream.getheaders():
+            if name.lower() not in HOP_BY_HOP:
+                self.send_header(name, value)
+        length_header = upstream.getheader("Content-Length")
+        chunked = length_header is None
+        if chunked:
+            self.send_header("Transfer-Encoding", "chunked")
+        elif length_header is not None:
+            self.send_header("Content-Length", length_header)
+        self.end_headers()
+        size = 0
+        try:
+            while True:
+                data = upstream.read(8192)
+                if not data:
+                    break
+                size += len(data)
+                if chunked:
+                    self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
+                else:
+                    self.wfile.write(data)
+                self.wfile.flush()
+        except OSError:
+            pass
+        if chunked:
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        self.record(provider, upstream.status, size)
+
+
+def serve():
+    os.makedirs(TOKENS, exist_ok=True)
+    KEYS.update({provider: keychain(provider) for provider in UPSTREAM})
+    with open(PIDFILE, "w", encoding="utf-8") as handle:
+        handle.write(str(os.getpid()))
+    held = ", ".join(name for name, key in KEYS.items() if key) or "none"
+    print("devbox-model-proxy: 127.0.0.1:%d, keychain items: %s" % (PORT, held), flush=True)
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    server.daemon_threads = True
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        server.serve_forever()
+    finally:
+        if os.path.exists(PIDFILE):
+            os.unlink(PIDFILE)
+
+
+def ensure():
+    if listening():
+        print("devbox-model-proxy: already listening on 127.0.0.1:%d" % PORT)
+        return 0
+    os.makedirs(ROOT, exist_ok=True)
+    with open(LOG, "a", encoding="utf-8") as out:
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "serve"], stdout=out, stderr=out,
+                         stdin=subprocess.DEVNULL, start_new_session=True, cwd="/")
+    for _ in range(40):
+        time.sleep(0.25)
+        if listening():
+            print("devbox-model-proxy: started on 127.0.0.1:%d" % PORT)
+            return 0
+    print("devbox-model-proxy: did not start — see %s" % LOG, file=sys.stderr)
+    return 1
+
+
+def stop():
+    try:
+        with open(PIDFILE, encoding="utf-8") as handle:
+            pid = int(handle.read().strip())
+    except (OSError, ValueError):
+        pid = 0
+    if not pid:
+        print("devbox-model-proxy: not running")
+        return 0
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    print("devbox-model-proxy: stopped")
+    return 0
+
+
+def verify(box):
+    findings = []
+    environment = subprocess.run(["docker", "exec", box, "printenv"], capture_output=True, text=True).stdout
+    leaked = any(name.endswith("_API_KEY") for name in environment.split())
+    findings.append(("inspect/printenv: no provider key env", "leak" if leaked else "clean"))
+    for provider in UPSTREAM:
+        key = keychain(provider)
+        if not key:
+            findings.append(("%s: keychain item" % provider, "absent"))
+            continue
+        found = subprocess.run(
+            ["docker", "exec", "-i", box, "grep", "-rlF", "-f", "-", "/root", "/opt", "/etc", "/usr/local"],
+            input=key, capture_output=True, text=True)
+        hits = [line for line in found.stdout.splitlines() if line.strip()]
+        findings.append(("%s: key in box filesystem" % provider, "leak " + ",".join(hits) if hits else "clean"))
+    status = 0
+    for label, verdict in findings:
+        print("%-34s %s" % (label, verdict))
+        status = 1 if verdict.startswith("leak") else status
+    return status
+
+
+def main(argv):
+    verb = argv[1] if len(argv) > 1 else "serve"
+    if verb == "serve":
+        serve()
+        return 0
+    if verb == "ensure":
+        return ensure()
+    if verb == "stop":
+        return stop()
+    if verb == "status":
+        print("devbox-model-proxy: %s on 127.0.0.1:%d, %d live token(s)"
+              % ("listening" if listening() else "down", PORT, len(live_tokens())))
+        return 0 if listening() else 1
+    if verb == "verify" and len(argv) > 2:
+        return verify(argv[2])
+    print("usage: devbox-model-proxy <serve|ensure|stop|status|verify <box>>", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

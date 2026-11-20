@@ -8,7 +8,7 @@ separate orchestrator; not the product.
 its Review log holds three rounds) and `docs/plans/completed/0004-agent-workstation.md`
 (delivered, signed off 2026-11-14; the agent payload, its stamp and the rebuild
 rule) — binding, and what review checks against. Context only, do not start:
-`docs/plans/0002-devbox-orchestrator.md`, `docs/plans/backlog.md`.
+`docs/plans/completed/0002-devbox-orchestrator.md`, `docs/plans/backlog.md`.
 
 ## Why it exists
 
@@ -25,7 +25,9 @@ structurally impossible here, not prompt-gated — see `docs/decisions/0001-sand
 - **I3** No `privileged`, `cap_add`, `devices`, `pid/ipc/network_mode: host`.
 - **I4** Never mount or export `~/.aws`, `~/.ssh`, `~/.config/gh`, `~/.docker`,
   `~/.npmrc`, `~/.pi`.
-- **I5** No cloud-reachable credential in this runtime (no egress layer yet).
+- **I5** No credential that reaches cloud infrastructure is present in the box. A model
+  credential is host-resident behind a loopback proxy; what the box holds is a
+  single-purpose token the provider rejects. See `docs/decisions/0001` (2026-11-16).
 - **I6** Every host-trusted config resolves from this repo, never from a mounted
   workspace.
 

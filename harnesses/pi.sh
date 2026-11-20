@@ -93,15 +93,35 @@ shell_bin=$(find /root/.cache/ms-playwright -type f \( -name headless_shell -o -
 mkdir -p /opt/devbox/browser
 ln -sf "$shell_bin" /opt/devbox/browser/headless_shell
 
+# D4 / ADR 0001 decision 2 — an unattended box may raise no dialog, and the container
+# boundary is what isolates it. The extension stays INSTALLED because it is the audit
+# trail (every decision, including each auto-approval, lands in
+# `logs/pi-permission-system-permission-review.jsonl`), and `yoloMode` is what makes it
+# silent: as of 2026-11-19 it covers every ask source — rule-based asks, the wrapper
+# sentinels a bash command synthesizes (`find -exec`, `xargs`, `sh -c` →
+# `<indirection-bash-wrapper>`; `bash -c`/`eval` → `<opaque-bash-wrapper>`), an
+# unparseable command, `external_directory`, and subagent approval forwarding — while
+# `deny` still denies. Measured: run 2026-11-19_21-20-39-def9 stalled twice on the wrapper
+# floor with `yoloMode` absent; the suite asserts it no longer can.
+#
+# slr is a second, independent policy library rather than a pi package entry; it ships
+# `enabled: true` with every surface `ask`. In a box it is off by default: it would ask for
+# the same class of thing, and slr itself is trust-by-default (slr ADR 0019).
 mkdir -p /root/.pi/agent/extensions/pi-permission-system
 cat > /root/.pi/agent/extensions/pi-permission-system/config.json <<'JSON'
 {
+  "yoloMode": true,
+  "permissionReviewLog": true,
   "permission": {
     "*": "allow",
     "bash": { "*": "allow" },
     "external_directory": "allow"
   }
 }
+JSON
+mkdir -p /root/.pi/agent/extensions/pi-permission-system-slr
+cat > /root/.pi/agent/extensions/pi-permission-system-slr/config.json <<'JSON'
+{ "enabled": false }
 JSON
 
 # D1 — every package is a path inside this image, resolved without copying
@@ -139,6 +159,26 @@ cat > /root/.pi/agent/settings.json <<'JSON'
     "+browser_resize",
     "+browser_close"
   ]
+}
+JSON
+
+# I5 amendment — both provider entries point at the host proxy, and the value here
+# is an `$ENV` reference resolved at request time, so the image carries no
+# credential and a `grep` for a provider key inside the box finds nothing to find.
+# Provider-level `baseUrl`/`apiKey` keep each provider's built-in model catalog.
+cat > /root/.pi/agent/models.json <<'JSON'
+{
+  "$schema": "https://pi.dev/schemas/models.schema.json",
+  "providers": {
+    "openrouter": {
+      "baseUrl": "http://host.lima.internal:8999/openrouter",
+      "apiKey": "$DEVBOX_MODEL_TOKEN"
+    },
+    "deepseek": {
+      "baseUrl": "http://host.lima.internal:8999/deepseek",
+      "apiKey": "$DEVBOX_MODEL_TOKEN"
+    }
+  }
 }
 JSON
 

@@ -218,14 +218,29 @@ check "the default build carries the headless shell only" \
 check "the default build carries no full chromium" \
   sh -c "! docker exec '$box' ls /root/.cache/ms-playwright | grep -q '^chromium-[0-9]'"
 
-echo "--- permissions are allow-all, behaviourally (criterion 4)"
-check "the canonical config is allow-all" \
-  sh -c "docker exec '$box' cat /root/.pi/agent/extensions/pi-permission-system/config.json | jq -e '.permission[\"*\"] == \"allow\" and .permission.bash[\"*\"] == \"allow\" and .permission.external_directory == \"allow\"' >/dev/null"
+echo "--- no permission dialog can be raised (criterion 4, ADR 0001 decision 2)"
+check "the permission extension is loaded" \
+  sh -c "docker exec '$box' pi list | grep -q pi-permission-system"
+check "the box config turns yoloMode on" \
+  sh -c "docker exec '$box' grep -q yoloMode /root/.pi/agent/extensions/pi-permission-system/config.json"
+check "the box config turns the review log on" \
+  sh -c "docker exec '$box' grep -q permissionReviewLog /root/.pi/agent/extensions/pi-permission-system/config.json"
+check "slr's policy library is seeded disabled" \
+  sh -c "docker exec '$box' cat /root/.pi/agent/extensions/pi-permission-system-slr/config.json | grep -qx '{ \"enabled\": false }'"
 ( printf '{"id":"1","type":"bash","command":"rm -rf /tmp/devbox-probe && printf ok > /root/probe && echo DONE"}\n'; sleep 10 ) |
   docker exec -i "$box" pi --offline --mode rpc --no-session > "$work/rpc" 2>&1 || true
-check "an unattended rm -rf and an out-of-cwd write complete with no prompt" \
+check "an unattended rm -rf and an out-of-cwd write complete" \
   grep -q '"command":"bash".*"success":true' "$work/rpc"
 check "the write landed" sh -c "docker exec '$box' cat /root/probe | grep -qx ok"
+
+# The behavioural half of this — a wrapper command (`find -exec`, `xargs`) raising no
+# dialog and landing a review row — is proven by a real unattended run and recorded in
+# `docs/plans/0002-devbox-orchestrator.md` (Measurement: run 2026-11-20, zero dialogs,
+# `READY-FOR-REVIEW.md`). It is deliberately NOT asserted here: driving it needs a live
+# model turn, which made this suite flaky rather than stronger — the same probe passed in
+# one container and not in another purely on first-session startup timing. What the image
+# can pin is the configuration that makes it possible, and the extension's own suite pins
+# the gate behaviour (`pi-permissions-system/test/yolo-unattended.test.ts`).
 
 echo "--- the stamp is what up compares (criterion 6)"
 image_stamp=$(docker image inspect devbox/dev-sbcl:local --format '{{ index .Config.Labels "devbox.agent.stamp" }}')

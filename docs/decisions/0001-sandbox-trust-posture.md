@@ -90,3 +90,31 @@ and objects). A repository carrying a git extension the image's git cannot read 
 unusable, so `doctor` and `up` refuse it loudly rather than half-starting. The
 hooks-path residual above is unchanged: `.git/config` stays writable, and `doctor`
 checks that the hooks *mount* is read-only, not that `core.hooksPath` points at it.
+
+## Amendment (2026-11-16) — I5 restated: the model credential is proxy-scoped, never box-resident
+
+**Context.** I5 reads "No cloud-reachable credential in this runtime (no egress layer
+yet)". An unattended agent cannot work without a model, and a model needs a credential —
+read literally, I5 forbids the one credential the runtime exists to use. Measurement
+(plan `0002`, slice 1) shows exactly where it bites: under a detached tmux a `/wf` run
+starts, completes stage 1, writes its audit trail, and stops at "No API key found for the
+selected model".
+
+**Decision.** I5 is restated, not weakened: **no credential that reaches cloud
+infrastructure is present in a box.** A model credential is permitted only when all three
+hold — it lives on the host (macOS Keychain), it is read by a host-resident process (a
+loopback proxy), and what the box carries is a single-purpose token the provider itself
+rejects. Everything else stays forbidden: AWS, GitHub, SSH, npm credentials, a mounted
+`~/.aws`, a key in an image layer.
+
+**Consequences.**
+- The box can think without holding anything worth stealing; a leaked box token costs at
+  most that box's model budget.
+- The proxy joins `up`'s critical path and the host's trust surface: it holds the key in
+  memory and must never log it. A host session the policy does not constrain can still
+  read the Keychain item — the developer's machine-level boundary, named rather than
+  papered over.
+- A future egress layer (backlog: Gondolin) can replace the proxy without touching the
+  rule, because the rule is about reachability, not mechanism.
+- I4 is unchanged: `~/.pi`, `~/.aws`, `~/.ssh`, `~/.config/gh`, `~/.docker` remain
+  unmountable.

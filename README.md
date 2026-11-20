@@ -31,7 +31,9 @@ remembered.
 - **I3** — no `privileged`, `cap_add`, `devices`, `pid`/`ipc`/`network_mode: host`.
 - **I4** — never `~/.aws`, `~/.ssh`, `~/.config/gh`, `~/.docker`, `~/.npmrc`,
   `~/.pi`.
-- **I5** — no cloud-reachable credential in this runtime (no egress layer yet).
+- **I5** — no credential that reaches cloud infrastructure is present in the box; the
+  model credential is host-resident behind a loopback proxy, and the box holds only a
+  single-purpose token the provider rejects (amendment).
 - **I6** — every host-trusted config resolves from this repo, never from a mounted
   workspace.
 
@@ -78,8 +80,10 @@ repository is refused rather than nested.
 
 `devbox shell <profile> <path>` drops you into the box. `pi` is on `PATH` there
 with the skills, agents and browser tools already installed, and the box carries no
-credential (I5) — authenticate once per box, in the session (`/login`) or by giving
-pi its own environment, never by baking a key into the image:
+credential (I5): authenticate in the session (`/login`) or give pi its own environment
+for that run only, never bake a key into the image. The durable route for an unattended
+box — a host-resident credential and a proxy, so the box never holds one — is
+[Model credentials](#model-credentials-the-keychain) below.
 
 ```console
 $ devbox up sbcl ~/source/priv/myapp      # shell needs a running box
@@ -137,17 +141,155 @@ agents and prompts installed by `skillset sync`, and Playwright's headless
 chromium shell pinned at `/opt/devbox/browser/headless_shell` and exported as
 `PI_PLAYWRIGHT_EXECUTABLE` in the container's environment. `DEVBOX_BROWSER=full`
 adds full chromium for headed work (+~0.6 GB); it is part of the stamp, so
-switching rebuilds. Permissions are explicit
-allow-all (`/root/.pi/agent/extensions/pi-permission-system/config.json`) and the
-thirteen `browser_*` tools are active from the first turn: an unattended session
-cannot answer a prompt, so the container boundary — not a dialog — is what
-isolates it.
+switching rebuilds. Permissions are **allow-all with `yoloMode` on**
+(`/root/.pi/agent/extensions/pi-permission-system/config.json`): a dialog in an unattended
+run is a stall, and yolo mode now covers **every** ask source — rule-based asks, the wrapper
+sentinels a bash command synthesizes (`find -exec`, `xargs`, `sh -c` →
+`<indirection-bash-wrapper>`; `bash -c`/`eval` → `<opaque-bash-wrapper>`), an unparseable
+command, `external_directory`, and subagent approval forwarding — while `deny` still
+denies. Every auto-approval is written to
+`logs/pi-permission-system-permission-review.jsonl` with its surface, command, matched
+pattern and reason, so removing the dialog does not remove the record. slr ships its own
+policy library (`enabled: true`, every surface `ask`); the image seeds it
+`{"enabled": false}`. All thirteen `browser_*` tools are active from the first turn.
 
 **Adding a tool** is a source change: a package goes into `settings.json` and a
 setting beside it, both in `harnesses/pi.sh`, and the next `up` carries it.
 **Adding a harness** (another agent) is one new `harnesses/<name>.sh` consuming
 the same `/opt/devbox/payload`, selected by `HARNESS` in the profile;
 `harnesses/none.sh` stays bare, so `base` carries no agent at all.
+
+## Model credentials (the Keychain)
+
+An agent needs a model credential, and it never enters the box: the agent there runs as
+root with allow-all permissions, so anything inside the container — an environment
+variable, a tmpfs file, a mount, an image layer — is readable by the very process it is
+meant to be kept from. So the credential lives in the macOS **login Keychain**, and a
+host-side proxy (plan `0002`) reads it once at start and gives the box a host-gateway
+URL plus a throwaway token the provider rejects. That proxy is
+`bin/devbox-model-proxy`: `devbox up` starts it, and no box authenticates with `/login`.
+
+| Keychain item (`-s`) | Account (`-a`) | Provider |
+|---|---|---|
+| `devbox-openrouter` | `devbox` | OpenRouter |
+| `devbox-deepseek` | `devbox` | DeepSeek |
+
+### On a new machine
+
+Run these **in your own terminal**, not through an agent session. `-w` comes last and
+takes no value, which is what makes `security` prompt: the secret then lands in neither
+shell history nor `ps` nor a transcript.
+
+```console
+$ security add-generic-password -s devbox-openrouter -a devbox -w
+password data for new item:            # paste the key
+retype password for new item:          # and again
+$ security add-generic-password -s devbox-deepseek -a devbox -w
+
+$ security find-generic-password -s devbox-openrouter -a devbox >/dev/null && echo present
+present
+```
+
+The first read by the proxy raises *“security wants to access key `devbox-openrouter`”*
+— click **Always Allow**, once per item. To pre-authorise instead (no prompt ever, and
+no alert when something else reads it):
+
+```console
+$ security add-generic-password -U -T /usr/bin/security -s devbox-openrouter -a devbox -w
+```
+
+### Rotate, and remove
+
+```console
+$ security add-generic-password -U -s devbox-openrouter -a devbox -w   # replace in place
+$ security delete-generic-password -s devbox-openrouter -a devbox      # remove
+```
+
+Rotate when a key has ever been typed as a command argument, written into a file or a
+dotfile export, pasted into a session, or when a machine changes hands. **Rotate at the
+provider first, then update the Keychain item** — updating first leaves a live stale key
+behind. After rotating, the running proxy holds the old value until it restarts, so
+`devbox down`/`up` (or a proxy restart) is part of the rotation.
+
+### Never
+
+- `… -w "<key>"`, or the legacy `-p "<key>"`: the value lands in shell history and
+  briefly in `ps`. `-A` (“any application, no warning”) makes that mistake permanent.
+- A `.env`, a dotfile export, a repo file, an image layer. `harnesses/lib/agent-payload.sh`
+  refuses a credential-shaped filename at build time — a backstop, not the plan.
+- Reading the item with `-w` “to check it”: that prints the key. `>/dev/null && echo
+  present` is the check.
+- A model key with no **spend cap**. Give each one a limit (OpenRouter per-key credit,
+  DeepSeek balance) so a leak costs a bounded amount and rotation stays cheap.
+
+The login Keychain is locked until you log in, so `up` must refuse to proceed without a
+readable item rather than start a box that cannot think.
+
+### The proxy and the box token
+
+- `devbox up` starts `bin/devbox-model-proxy` on `127.0.0.1:8999` if it is not already
+  listening, and mints one token per box under
+  `~/.local/state/devbox/model-proxy/tokens/<compose project>`. One proxy serves every
+  box; that file name is what attributes a request to a project.
+- It binds loopback only. The box reaches it as `host.lima.internal:8999`, which colima
+  forwards; nothing on the LAN can.
+- The box's `/root/.pi/agent/models.json` points `openrouter` and `deepseek` at
+  `http://host.lima.internal:8999/<provider>` with `apiKey: "$DEVBOX_MODEL_TOKEN"`. A
+  provider-level `baseUrl`/`apiKey` keeps each built-in model catalog and changes only
+  the endpoint and the credential.
+- `devbox down` deletes that one token file, so the token dies with the box while the
+  proxy and the Keychain item stand. `bin/devbox-model-proxy stop` stops the listener;
+  `up` starts it again.
+- **Proxy down** → the box fails as a transport error naming the gateway, never as a
+  provider 401. `doctor` reports it rather than letting `up` imply a box that can think.
+- Verify without printing anything: `bin/devbox-model-proxy verify <box>` prints `clean`
+  per provider. It reads the Keychain in its own memory and pipes the key to `grep -f -`,
+  so the value never reaches a shell argument or a transcript.
+- A box's `models.json` and `docker inspect` show the **token**, never a provider key.
+  `tests/credentials.test.sh` asserts exactly that, and that the provider itself answers
+  `401` for the token.
+
+> **Filed:** the rule behind this section is amendment 2026-11-16 of
+> `docs/decisions/0001-sandbox-trust-posture.md`, and `AGENTS.md`'s I5 carries the restated
+> form — no credential that reaches cloud infrastructure is present in the box; the model
+> credential is host-resident behind a loopback proxy, and what the box holds is a
+> single-purpose token the provider rejects.
+
+## The walk-away loop
+
+A brief in, a review-ready artifact out, nobody watching:
+
+```console
+$ devbox work sbcl ~/source/priv/myapp docs/plans/0007-thing.md   # up, then run it detached
+$ devbox watch ~/source/priv/myapp                                # notify, then exit
+# …walk away…
+$ devbox attach sbcl ~/source/priv/myapp                          # look in whenever you like
+```
+
+`work` brings the box up, starts an interactive `pi` in a detached tmux session, waits for
+its prompt and submits `/wf <workflow> <brief>` (`DEVBOX_WORKFLOW`, default `deliver`). No
+keypress is needed after that: the box raises no permission dialog by design.
+
+**The one artifact.** A run ends by writing exactly one of these at the project root:
+
+| Artifact | Means | What you do |
+|---|---|---|
+| `READY-FOR-REVIEW.md` | every task reached `done`, the lenses are clean | review the diff, then commit on the host |
+| `BLOCKED.md` | at least one task hit its round cap, or a lens found blockers | read the blocked task's last verdict — it names what could not be satisfied — fix the brief, then re-run |
+
+Never both, never neither; `devbox watch` fires on either and stays silent for everything
+else.
+
+**Inspect and resume.** Every run leaves `.flow/workflows/runs/<run-id>.jsonl` plus a
+session directory per stage under `runs/<run-id>/sessions/`, and the task lane keeps
+`.flow/tasks/task-<n>.json` and `.flow/artifacts/verdicts/`. Re-enter a finished run with
+`/wf @<run-id>` inside the box (`devbox attach` first): a run that stopped on a transient
+failure resumes from the stage it reached, and a `BLOCKED.md` run resumes the tasks that are
+not yet `done`.
+
+**When a task cannot be satisfied**, `BLOCKED.md` is the correct outcome, not a bug: the
+supervisor stops that task at its round cap and spends no other task's rounds. Fix the
+criterion (or the code), then re-run; nothing retries forever.
 
 ## `devbox doctor`
 
@@ -236,5 +378,5 @@ $ git -C <slr checkout> archive HEAD | tar -x -C ~/.cache/devbox/slr-src
 | `tests/worktree.test.sh` | the worktree boundary end to end |
 | `tests/agent-image.test.sh` | the agent layer inside a real box |
 | `docs/plans/completed/` | the delivered specifications: `0001` runtime, `0003` worktrees, `0004` agent workstation |
-| `docs/plans/0002-*`, `backlog.md` | not delivered: the supervisor `0002`, and the backlog behind it |
+| `docs/plans/completed/0002-*`, `backlog.md` | the supervisor `0002` (delivered) and the backlog behind it |
 | `docs/decisions/` | the durable *why*: trust posture, payload-from-source-content |

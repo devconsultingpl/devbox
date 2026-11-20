@@ -8,6 +8,9 @@
 #   devbox doctor <profile> <path>   validate the effective config (I1–I4)
 #   devbox policy <commits-allowed|review-only> <path>
 #   devbox policy --list
+#   devbox watch  <path>             notify on the run's terminal artifact (criterion 4)
+#   devbox work   <profile> <path> <brief>    up, then run a workflow detached (criterion 1)
+#   devbox attach <profile> <path>   reconnect to the work session
 #
 # <path> is a repository root or a git worktree root. The box mounts that tree
 # and its gitdir at their own host paths (0003 D1), so git metadata written by
@@ -28,6 +31,13 @@ state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/devbox
 pi_ext_repo=${PIEXT_REPO:-$HOME/source/priv/pi-extensions}
 skillset_repo=${SKILLSET_REPO:-$HOME/source/priv/skillset}
 contexts_dir=$state_dir/contexts
+# I5 amendment — the model credential never enters the box: the key stays in the
+# login Keychain behind a loopback proxy, and the box receives a token that proxy
+# accepts and the provider rejects (plan 0002).
+model_proxy=$repo/bin/devbox-model-proxy
+state_tokens=$state_dir/model-proxy/tokens
+token_file=$state_dir/model-proxy/no-box.env
+export DEVBOX_STATE_DIR="$state_dir"
 
 . "$repo/harnesses/lib/agent-payload.sh"
 
@@ -39,7 +49,7 @@ die() { echo "devbox: $*" >&2; exit 1; }
 dgit() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR GIT_OPTIONAL_LOCKS=0 git "$@"; }
 
 usage() {
-  sed -n '4,10p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '4,13p' "$0" | sed 's/^# \{0,1\}//'
   echo ""
   echo "profiles: $(cd "$profiles_dir" && ls ./*.yaml 2>/dev/null | sed 's|\./||;s|\.yaml||' | tr '\n' ' ')"
   exit "${1:-1}"
@@ -67,6 +77,10 @@ policy_read() {
 }
 
 case "$verb" in
+  watch)
+    [ "$#" -ge 1 ] || usage 1
+    exec "$repo/bin/devbox-watch" "$@"
+    ;;
   policy)
     case "${1:-}" in
       --list)
@@ -291,6 +305,20 @@ prepare_agent_payload() {
   skillset_src=$skillset_context
 }
 
+# The token is a file, minted iff absent: a re-`up` must not revoke a token a
+# running session is already using, and `down` revokes it by deleting exactly this
+# one file — the proxy reads the directory, so no other state exists to clean up.
+mint_model_token() {
+  (umask 077; mkdir -p "$state_tokens") || return 1
+  file=$state_tokens/$project_name
+  if [ ! -f "$file" ]; then
+    (umask 077; printf 'DEVBOX_MODEL_TOKEN=%s\n' \
+      "$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')" > "$file.tmp.$$" &&
+      mv "$file.tmp.$$" "$file") || return 1
+  fi
+  echo "$file"
+}
+
 compose() {
   DEVBOX_REPO="$repo" DEVBOX_PROFILE="$profile" DEVBOX_WORKTREE="$worktree" \
   DEVBOX_GITDIR="$gitdir" DEVBOX_GITDIR_RO="$gitdir_ro" \
@@ -298,6 +326,7 @@ compose() {
   DEVBOX_AGENT_STAMP="$agent_stamp" DEVBOX_PIEXT_SOURCE="$pi_ext_source" \
   DEVBOX_SKILLSET_SOURCE="$skillset_source" DEVBOX_BROWSER_MODE="$browser_mode" \
   DEVBOX_PIEXT_SRC="$piext_src" DEVBOX_SKILLSET_SRC="$skillset_src" \
+  DEVBOX_MODEL_TOKEN_FILE="$token_file" \
   docker compose --profile build -f "$compose_file" -f "$profile_file" "$@"
 }
 
@@ -365,6 +394,14 @@ doctor() {
       echo "devbox doctor: agent sources unavailable — up would refuse ($pi_ext_repo, $skillset_repo)"
     fi
     find "$doctor_root" -depth -delete
+    # A box whose proxy is down fails as a transport error, not as a bad key, so
+    # reachability is reported before `up` claims a box can think.
+    if ! "$model_proxy" status >/dev/null 2>&1; then
+      echo "devbox doctor: model proxy is not listening — run: $model_proxy ensure" >&2
+    fi
+    if [ ! -f "$state_tokens/$project_name" ]; then
+      echo "devbox doctor: no model token minted for $project_name — run: devbox up $profile $worktree" >&2
+    fi
   fi
 }
 
@@ -387,7 +424,7 @@ case "${DEVBOX_BROWSER:-headless}" in
   *) die "DEVBOX_BROWSER must be headless or full, not: ${DEVBOX_BROWSER}" ;;
 esac
 case "$verb" in
-  up|shell|doctor) policy=$(policy_read "$worktree") ;;
+  up|shell|doctor|work|attach) policy=$(policy_read "$worktree") ;;
   down) policy=commits-allowed ;;
   *) usage 1 ;;
 esac
@@ -403,6 +440,8 @@ case "$verb" in
     require_harness_script "$harness"
     if [ "$harness" != none ]; then
       prepare_agent_payload || die "agent payload unavailable — up refused"
+      "$model_proxy" ensure || die "model proxy unavailable — a box cannot reach a model without it"
+      token_file=$(mint_model_token) || die "could not mint a model token under $state_tokens"
     fi
     image="devbox/dev-$profile:local"
     current=$(docker image inspect "$image" --format '{{ index .Config.Labels "devbox.agent.stamp" }}' 2>/dev/null || true)
@@ -419,6 +458,10 @@ case "$verb" in
     ;;
   shell)  compose exec devbox /bin/zsh -l ;;
   down)
+    if [ -f "$state_tokens/$project_name" ]; then
+      find "$state_tokens" -maxdepth 1 -type f -name "$project_name" -delete
+      echo "devbox: revoked the model token for $project_name; the proxy and the Keychain item stand"
+    fi
     if [ "$purge" = 1 ]; then
       compose down -v --remove-orphans
     else
@@ -433,6 +476,54 @@ case "$verb" in
         docker volume rm "$v" >/dev/null && echo "devbox: removed slr volume $v (D10)"
       done
     fi
+    ;;
+  work)
+    shift 2
+    [ "$#" -ge 1 ] || usage 1
+    # The driving mode is the plan's D1: an interactive pi in a detached tmux, because
+    # `/wf` refuses a non-interactive session and every loop/judge/cap mechanism lives
+    # behind it. Nothing about the run needs input, so `unattended` is a property of the
+    # workflow, not of the terminal.
+    brief=$*
+    workflow=${DEVBOX_WORKFLOW:-deliver}
+    session=${DEVBOX_WORK_SESSION:-devbox}
+    "$0" up "$profile" "$project" >&2
+    compose exec -T devbox tmux kill-session -t "$session" >/dev/null 2>&1 || true
+    compose exec -T devbox tmux new-session -d -s "$session" -x 200 -y 50 pi
+    # pi draws its rule once the TUI is up; before that the pane is blank and an Enter
+    # sent early is swallowed — the line sits in the input box looking submitted
+    # (measured 2026-11-19). Readiness is checked, never assumed.
+    waited=0
+    while [ "$waited" -lt 90 ]; do
+      compose exec -T devbox tmux capture-pane -p -t "$session" 2>/dev/null | grep -q -- '(auto)' && break
+      sleep 1
+      waited=$((waited + 1))
+    done
+    [ "$waited" -lt 90 ] || die "pi did not draw its prompt in 90s — check: devbox attach $profile $project"
+    # Typing into a TUI that is still starting up is lossy — a fresh image's first session
+    # downloads pi's helpers — so the text is confirmed on screen before it is submitted,
+    # and a second Enter on an already-submitted prompt is a harmless no-op.
+    line="/wf $workflow $brief"
+    typed=0
+    for _ in 1 2 3 4 5 6; do
+      compose exec -T devbox tmux send-keys -t "$session" -l "$line"
+      sleep 2
+      if compose exec -T devbox tmux capture-pane -p -t "$session" 2>/dev/null | grep -qF -- "/wf $workflow"; then
+        typed=1
+        break
+      fi
+    done
+    [ "$typed" = 1 ] || die "could not type the workflow line into the session — check: devbox attach $profile $project"
+    for _ in 1 2 3; do
+      sleep 2
+      compose exec -T devbox tmux send-keys -t "$session" Enter
+    done
+    echo "devbox: /wf $workflow $brief — session '$session' in the box, no client attached"
+    echo "devbox: reconnect with: devbox attach $profile $project"
+    echo "devbox: notify with:    devbox watch $project"
+    ;;
+  attach)
+    compose exec devbox tmux attach -t "${DEVBOX_WORK_SESSION:-devbox}"
     ;;
   doctor) doctor ;;
   *)      usage 1 ;;

@@ -82,6 +82,17 @@ services:
       # D5 — the browser the payload was built with, pinned for every launch
       # (a tmux- or exec-launched pi never reads ~/.zshenv).
       PI_PLAYWRIGHT_EXECUTABLE: /opt/devbox/browser/headless_shell
+      # Criterion 8/9 — the terminal artifact has to cite the run, the workflow and the
+      # image that produced it, and only the host knows the last one. Exported here so the
+      # writer inside the box can read it instead of guessing.
+      DEVBOX_AGENT_STAMP: ${DEVBOX_AGENT_STAMP:-unstamped}
+      DEVBOX_WORKFLOW: ${DEVBOX_WORKFLOW:-deliver}
+    # I5 amendment — the model credential is not here. The box holds a single-purpose
+    # token the provider rejects; the host proxy adds the real one. `required: false`
+    # keeps a `none` box (no harness, no token minted) startable.
+    env_file:
+      - path: ${DEVBOX_MODEL_TOKEN_FILE:?set by bin/devbox}
+        required: false
     init: true
     # The container is a place to work in, not a process: keep it alive so
     # `devbox shell` can exec into it.
